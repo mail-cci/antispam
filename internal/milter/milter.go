@@ -2,13 +2,16 @@ package milter
 
 import (
 	"context"
+	"io"
 	"log"
+	"net"
 
-	milter "github.com/emersion/go-milter"
 	antimod "github.com/example/antispam/internal/antispam"
 )
 
-// Server wraps the go-milter library and delegates spam detection to Scorer.
+// Server provides a very small stub implementation that would normally expose
+// a Milter compatible interface. It listens on the configured network/address
+// and forwards the raw message body to the spam scorer.
 type Server struct {
 	network string
 	addr    string
@@ -23,44 +26,40 @@ func NewServer(network, addr string, scorer *antimod.Scorer) *Server {
 
 // Serve starts listening for connections from Postfix.
 func (s *Server) Serve(ctx context.Context) error {
-	srv := milter.Server{
-		Network: s.network,
-		Addr:    s.addr,
-		// Each connection will create a session that implements the Handler interface.
-		// Using inline struct for brevity.
-		Factory: func() (milter.Milter, error) {
-			return &session{scorer: s.scorer}, nil
-		},
+	l, err := net.Listen(s.network, s.addr)
+	if err != nil {
+		return err
 	}
-	return srv.ListenAndServe(ctx)
-}
+	defer l.Close()
+	log.Printf("milter listening on %s %s", s.network, s.addr)
 
-type session struct {
-	milter.Session
-	scorer *antimod.Scorer
-}
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				log.Printf("accept error: %v", err)
+				continue
+			}
+		}
 
-// Connect is called at the start of a new SMTP session.
-func (s *session) Connect(ctx context.Context, c *milter.Connect) error {
-	log.Printf("connect from %s", c.Host)
-	return nil
-}
-
-// Headers returns continue to let Postfix send body.
-func (s *session) Headers(ctx context.Context, h *milter.Headers) error {
-	return nil
-}
-
-// Body is called with the full message body.
-func (s *session) Body(ctx context.Context, b *milter.Body) error {
-	msg := &antimod.Message{
-		From:    b.MailFrom,
-		Subject: b.Header.Get("Subject"),
-		Body:    string(b.Bytes()),
+		go s.handleConn(ctx, conn)
 	}
+}
+
+func (s *Server) handleConn(ctx context.Context, c net.Conn) {
+	defer c.Close()
+
+	data, err := io.ReadAll(c)
+	if err != nil {
+		log.Printf("failed to read connection: %v", err)
+		return
+	}
+
+	msg := &antimod.Message{Body: string(data)}
 	if s.scorer.IsSpam(msg) {
-		// Reject spam messages.
-		return milter.NewResponse(550, 5, 7, "Message rejected as spam")
+		log.Printf("spam detected from %s", c.RemoteAddr())
 	}
-	return nil
 }
