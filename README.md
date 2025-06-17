@@ -35,3 +35,11 @@ Unit tests can be executed with:
 go test ./...
 ```
 
+
+### Testing the milter
+
+Use the helper script to compile the project, start the server and send the sample emails with [swaks](https://www.jetmore.org/john/code/swaks/). A local SMTP service listening on port 25 is required.
+
+```bash
+scripts/test_milter.sh
+```
