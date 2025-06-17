@@ -1,0 +1,31 @@
+# Environment of the application: options are 'development', 'production'
+env: "production"
+
+# Logging level for the application: options are 'debug', 'info', 'warning', 'error', 'critical'
+log:
+  level: "info"
+  path: "./logs"
+
+# Configuration for Milter server that listens for incoming emails
+milter:
+  port: "12345"
+
+# Configuration for the api server
+api:
+  port: "8081"
+
+database:
+  # mysql database connection string
+  url: "root:root@tcp(localhost:3306)/spam"
+  max_connections: 10
+
+redis:
+  url: "localhost:6379"
+  timeout: "5s"
+
+http:
+  timeout: "10s"
+
+metrics:
+  enabled: true
+  path: "/metrics"
