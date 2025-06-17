@@ -1,7 +1,11 @@
 package milt
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+
+	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-milter"
 	"github.com/mail-cci/antispam/pkg/helpers"
 	"go.uber.org/zap"
@@ -11,13 +15,23 @@ import (
 )
 
 type Email struct {
-	logger *zap.Logger
-	id     string
-	sender string
-	from   string
-	client map[string]string
-	helo   string
-	status string
+	logger      *zap.Logger
+	id          string
+	sender      string
+	from        string
+	client      map[string]string
+	helo        string
+	status      string
+	headers     textproto.MIMEHeader
+	rawBody     bytes.Buffer
+	attachments []Attachment
+}
+
+// Attachment stores metadata and content for an email attachment.
+type Attachment struct {
+	Filename    string
+	ContentType string
+	Data        []byte
 }
 
 // Reset clears all fields so the Email instance can be reused.
@@ -29,6 +43,9 @@ func (e *Email) Reset() {
 	e.client = nil
 	e.helo = ""
 	e.status = ""
+	e.headers = nil
+	e.rawBody.Reset()
+	e.attachments = nil
 }
 
 var emailPool = sync.Pool{
@@ -40,6 +57,7 @@ func MailProcessor(logger *zap.Logger) *Email {
 	e.Reset()
 	e.logger = logger
 	e.client = make(map[string]string)
+	e.headers = make(textproto.MIMEHeader)
 	return e
 }
 
@@ -90,6 +108,7 @@ func (e *Email) Header(name string, value string, m *milter.Modifier) (milter.Re
 		zap.String("value", value),
 		zap.String("correlation_id", e.id),
 		zap.String("type", "header"))
+	e.headers.Add(name, value)
 	return milter.RespContinue, nil
 }
 
@@ -98,6 +117,7 @@ func (e *Email) Headers(h textproto.MIMEHeader, m *milter.Modifier) (milter.Resp
 		zap.Any("headers", h),
 		zap.String("correlation_id", e.id),
 		zap.String("type", "headers"))
+	e.headers = h
 	return milter.RespContinue, nil
 }
 
@@ -106,6 +126,7 @@ func (e *Email) BodyChunk(chunk []byte, m *milter.Modifier) (milter.Response, er
 		zap.String("chunk", string(chunk[:10])),
 		zap.String("correlation_id", e.id),
 		zap.String("type", "body_chunk"))
+	e.rawBody.Write(chunk)
 	return milter.RespContinue, nil
 }
 
@@ -113,6 +134,53 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	e.logger.Debug("[cci-spam-inbound-prefilter] - Body: ",
 		zap.String("correlation_id", e.id),
 		zap.String("type", "body"))
+
+	var raw bytes.Buffer
+	// Reconstruct full email from headers and collected body
+	for k, vv := range e.headers {
+		for _, v := range vv {
+			fmt.Fprintf(&raw, "%s: %s\r\n", k, v)
+		}
+	}
+	raw.WriteString("\r\n")
+	raw.Write(e.rawBody.Bytes())
+
+	mr, err := mail.CreateReader(&raw)
+	if err != nil {
+		e.logger.Error("failed to parse email", zap.Error(err))
+		return milter.RespTempFail, nil
+	}
+
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			e.logger.Error("error reading MIME part", zap.Error(err))
+			return milter.RespTempFail, nil
+		}
+
+		switch h := p.Header.(type) {
+		case *mail.InlineHeader:
+			data, _ := io.ReadAll(p.Body)
+			e.rawBody.Reset()
+			e.rawBody.Write(data)
+		case *mail.AttachmentHeader:
+			filename, _ := h.Filename()
+			ctype, _, err := h.ContentType()
+			if err != nil {
+				ctype = ""
+			}
+			data, _ := io.ReadAll(p.Body)
+			e.attachments = append(e.attachments, Attachment{
+				Filename:    filename,
+				ContentType: ctype,
+				Data:        data,
+			})
+		}
+	}
+
 	return milter.RespAccept, nil
 }
 
