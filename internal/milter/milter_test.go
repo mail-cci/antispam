@@ -2,6 +2,8 @@ package milt
 
 import (
 	"net/textproto"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,6 +47,14 @@ func TestEmailParsing(t *testing.T) {
 	if resp, err := e.Body(nil); err != nil || resp != milter.RespAccept {
 		t.Fatalf("Body returned resp=%v err=%v", resp, err)
 	}
+
+	// Verify email file was created
+	fileName := e.id + ".eml"
+	path := filepath.Join("testdata", fileName)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected email file %s not found: %v", path, err)
+	}
+	os.Remove(path)
 
 	if e.rawBody.String() != "Hello" {
 		t.Errorf("unexpected body: %q", e.rawBody.String())

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-milter"
@@ -148,6 +150,13 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	}
 	raw.WriteString("\r\n")
 	raw.Write(e.rawBody.Bytes())
+
+	// Save raw email for testing/debugging purposes
+	fileName := e.id + ".eml"
+	filePath := filepath.Join("testdata", fileName)
+	if err := os.WriteFile(filePath, raw.Bytes(), 0644); err != nil {
+		e.logger.Error("failed to write email file", zap.Error(err))
+	}
 
 	mr, err := mail.CreateReader(&raw)
 	if err != nil {

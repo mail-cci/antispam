@@ -27,6 +27,9 @@ start the application:
 The program will start the milter and HTTP servers using the ports defined
 in the configuration file.
 
+All emails received by the milter are also stored as `.eml` files under the
+`testdata` directory for inspection.
+
 ## Testing
 
 Unit tests can be executed with:
