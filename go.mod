@@ -1,6 +1,6 @@
 module github.com/mail-cci/antispam
 
-go 1.23.8
+go 1.22
 
 require (
 	github.com/emersion/go-milter v0.4.1
