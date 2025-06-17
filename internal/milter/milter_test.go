@@ -56,3 +56,19 @@ func TestEmailParsing(t *testing.T) {
 		t.Errorf("unexpected attachment name: %s", e.attachments[0].Filename)
 	}
 }
+
+func TestBodyChunkShort(t *testing.T) {
+	logger := zap.NewNop()
+	e := MailProcessor(logger)
+	defer e.Close()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("BodyChunk panicked: %v", r)
+		}
+	}()
+
+	if resp, err := e.BodyChunk([]byte("short"), nil); err != nil || resp != milter.RespContinue {
+		t.Fatalf("BodyChunk returned resp=%v err=%v", resp, err)
+	}
+}

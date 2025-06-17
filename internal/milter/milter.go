@@ -122,8 +122,12 @@ func (e *Email) Headers(h textproto.MIMEHeader, m *milter.Modifier) (milter.Resp
 }
 
 func (e *Email) BodyChunk(chunk []byte, m *milter.Modifier) (milter.Response, error) {
+	preview := chunk
+	if len(preview) > 10 {
+		preview = preview[:10]
+	}
 	e.logger.Debug("[cci-spam-inbound-prefilter] - BodyChunk: ",
-		zap.String("chunk", string(chunk[:10])),
+		zap.String("chunk", string(preview)),
 		zap.String("correlation_id", e.id),
 		zap.String("type", "body_chunk"))
 	e.rawBody.Write(chunk)
