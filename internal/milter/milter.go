@@ -20,12 +20,24 @@ type Email struct {
 	status string
 }
 
+// Reset clears all fields so the Email instance can be reused.
+func (e *Email) Reset() {
+	e.logger = nil
+	e.id = ""
+	e.sender = ""
+	e.from = ""
+	e.client = nil
+	e.helo = ""
+	e.status = ""
+}
+
 var emailPool = sync.Pool{
 	New: func() interface{} { return new(Email) },
 }
 
 func MailProcessor(logger *zap.Logger) *Email {
 	e := emailPool.Get().(*Email)
+	e.Reset()
 	e.logger = logger
 	e.client = make(map[string]string)
 	return e
@@ -108,5 +120,17 @@ func (e *Email) Abort(m *milter.Modifier) error {
 	e.logger.Debug("[cci-spam-inbound-prefilter] - Abort: ",
 		zap.String("correlation_id", e.id),
 		zap.String("type", "abort"))
+	return nil
+}
+
+// Close is called when the milter session ends.
+func (e *Email) Close() error {
+	if e.logger != nil {
+		e.logger.Debug("[cci-spam-inbound-prefilter] - Close:",
+			zap.String("correlation_id", e.id),
+			zap.String("type", "close"))
+	}
+	e.Reset()
+	emailPool.Put(e)
 	return nil
 }
