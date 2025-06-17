@@ -4,11 +4,11 @@ env: "production"
 # Logging level for the application: options are 'debug', 'info', 'warning', 'error', 'critical'
 log:
   level: "info"
-  path: "./logs"
+  path: "../../logs"
 
 # Configuration for Milter server that listens for incoming emails
 milter:
-  port: "12345"
+  port: "4829"
 
 # Configuration for the api server
 api:
