@@ -21,7 +21,8 @@ func main() {
 	scorer := am.NewScorer()
 
 	apiSrv := api.NewServer(cfg.API.Addr, scorer)
-	milterSrv := milter.NewServer(cfg.Milter.Addr, scorer)
+
+	milterSrv := milter.NewServer(cfg.Milter.Network, cfg.Milter.Addr, scorer)
 
 	// Run API in separate goroutine
 	go func() {

@@ -11,7 +11,8 @@ type Config struct {
 		Addr string `yaml:"addr"`
 	} `yaml:"api"`
 	Milter struct {
-		Addr string `yaml:"addr"`
+		Network string `yaml:"network"`
+		Addr    string `yaml:"addr"`
 	} `yaml:"milter"`
 	Logging struct {
 		Level string `yaml:"level"`

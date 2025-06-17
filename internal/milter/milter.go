@@ -10,19 +10,22 @@ import (
 
 // Server wraps the go-milter library and delegates spam detection to Scorer.
 type Server struct {
-	addr   string
-	scorer *antimod.Scorer
+	network string
+	addr    string
+	scorer  *antimod.Scorer
 }
 
-// NewServer creates a new Milter server.
-func NewServer(addr string, scorer *antimod.Scorer) *Server {
-	return &Server{addr: addr, scorer: scorer}
+// NewServer creates a new Milter server using the given network and address.
+// Network is typically "tcp" or "unix".
+func NewServer(network, addr string, scorer *antimod.Scorer) *Server {
+	return &Server{network: network, addr: addr, scorer: scorer}
 }
 
 // Serve starts listening for connections from Postfix.
 func (s *Server) Serve(ctx context.Context) error {
 	srv := milter.Server{
-		Addr: s.addr,
+		Network: s.network,
+		Addr:    s.addr,
 		// Each connection will create a session that implements the Handler interface.
 		// Using inline struct for brevity.
 		Factory: func() (milter.Milter, error) {
