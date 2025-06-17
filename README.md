@@ -27,6 +27,21 @@ start the application:
 The program will start the milter and HTTP servers using the ports defined
 in the configuration file.
 
+## Database
+
+The application uses MySQL to persist processed emails. Connection settings are
+configured in `cmd/antispam/config.yaml` under the `database` section. A helper
+initialization in the code will automatically create the required tables:
+
+- `emails` – main metadata
+- `email_headers` – individual header fields
+- `email_attachments` – attachment contents
+- `spam_scores` – analysis results
+- `quarantine` – quarantined emails
+
+Ensure a MySQL instance is available and the configured user has privileges to
+create tables.
+
 ## Testing
 
 Unit tests can be executed with:

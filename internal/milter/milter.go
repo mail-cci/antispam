@@ -2,11 +2,13 @@ package milt
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 
 	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-milter"
+	"github.com/mail-cci/antispam/internal/storage"
 	"github.com/mail-cci/antispam/pkg/helpers"
 	"go.uber.org/zap"
 	"net"
@@ -16,6 +18,7 @@ import (
 
 type Email struct {
 	logger      *zap.Logger
+	store       *storage.Storage
 	id          string
 	sender      string
 	from        string
@@ -37,6 +40,7 @@ type Attachment struct {
 // Reset clears all fields so the Email instance can be reused.
 func (e *Email) Reset() {
 	e.logger = nil
+	e.store = nil
 	e.id = ""
 	e.sender = ""
 	e.from = ""
@@ -52,10 +56,11 @@ var emailPool = sync.Pool{
 	New: func() interface{} { return new(Email) },
 }
 
-func MailProcessor(logger *zap.Logger) *Email {
+func MailProcessor(logger *zap.Logger, store *storage.Storage) *Email {
 	e := emailPool.Get().(*Email)
 	e.Reset()
 	e.logger = logger
+	e.store = store
 	e.client = make(map[string]string)
 	e.headers = make(textproto.MIMEHeader)
 	return e
@@ -185,6 +190,12 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		}
 	}
 
+	if e.store != nil {
+		if err := e.store.SaveEmail(context.Background(), e); err != nil {
+			e.logger.Error("failed to save email", zap.Error(err))
+		}
+	}
+
 	return milter.RespAccept, nil
 }
 
@@ -206,3 +217,12 @@ func (e *Email) Close() error {
 	emailPool.Put(e)
 	return nil
 }
+
+// Accessors used by storage layer
+func (e *Email) ID() string                    { return e.id }
+func (e *Email) From() string                  { return e.from }
+func (e *Email) Helo() string                  { return e.helo }
+func (e *Email) Client() map[string]string     { return e.client }
+func (e *Email) Headers() textproto.MIMEHeader { return e.headers }
+func (e *Email) Body() string                  { return e.rawBody.String() }
+func (e *Email) Attachments() []Attachment     { return e.attachments }
