@@ -46,7 +46,7 @@ func TestEmailParsing(t *testing.T) {
 		t.Fatalf("Body returned resp=%v err=%v", resp, err)
 	}
 
-	if e.rawBody.String() != "Hello\r\n" {
+	if e.rawBody.String() != "Hello" {
 		t.Errorf("unexpected body: %q", e.rawBody.String())
 	}
 	if len(e.attachments) != 1 {
