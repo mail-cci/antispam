@@ -54,7 +54,7 @@ func TestEmailParsing(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected email file %s not found: %v", path, err)
 	}
-	os.Remove(path)
+	t.Cleanup(func() { os.Remove(path) })
 
 	if e.rawBody.String() != "Hello" {
 		t.Errorf("unexpected body: %q", e.rawBody.String())

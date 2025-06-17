@@ -154,6 +154,9 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	// Save raw email for testing/debugging purposes
 	fileName := e.id + ".eml"
 	filePath := filepath.Join("testdata", fileName)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		e.logger.Error("failed to create testdata directory", zap.Error(err))
+	}
 	if err := os.WriteFile(filePath, raw.Bytes(), 0644); err != nil {
 		e.logger.Error("failed to write email file", zap.Error(err))
 	}
