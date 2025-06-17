@@ -1,0 +1,6 @@
+api:
+  addr: ":8080"
+milter:
+  addr: "unix:///var/spool/postfix/milter.sock"
+logging:
+  level: "info"
