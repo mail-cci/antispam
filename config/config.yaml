@@ -1,0 +1,7 @@
+api:
+  addr: ":8080"
+milter:
+  network: "tcp"
+  addr: ":11332"
+logging:
+  level: "info"
