@@ -26,6 +26,19 @@ redis:
 http:
   timeout: "10s"
 
+auth:
+  spf:
+    enabled: true
+    timeout: 3s
+    cache_ttl: 1h
+  dkim:
+    enabled: true
+    timeout: 5s
+
+scoring:
+  reject_threshold: 10.0
+  quarantine_threshold: 5.0
+
 metrics:
   enabled: true
   path: "/metrics"

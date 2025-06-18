@@ -7,6 +7,27 @@ import (
 	"github.com/spf13/viper"
 )
 
+type SPFConfig struct {
+	Enabled  bool
+	Timeout  time.Duration
+	CacheTTL time.Duration
+}
+
+type DKIMConfig struct {
+	Enabled bool
+	Timeout time.Duration
+}
+
+type ScoringConfig struct {
+	RejectThreshold     float64
+	QuarantineThreshold float64
+}
+
+type AuthConfig struct {
+	SPF  SPFConfig
+	DKIM DKIMConfig
+}
+
 type Config struct {
 	Env              string
 	LogLevel         string
@@ -18,6 +39,8 @@ type Config struct {
 	RedisURL         string
 	RedisTimeout     time.Duration
 	HTTPTimeout      time.Duration
+	Auth             AuthConfig
+	Scoring          ScoringConfig
 }
 
 func LoadConfig() (*Config, error) {
@@ -47,6 +70,21 @@ func LoadConfig() (*Config, error) {
 		RedisURL:         viper.GetString("redis.url"),
 		RedisTimeout:     viper.GetDuration("redis.timeout"),
 		HTTPTimeout:      viper.GetDuration("http.timeout"),
+		Auth: AuthConfig{
+			SPF: SPFConfig{
+				Enabled:  viper.GetBool("auth.spf.enabled"),
+				Timeout:  viper.GetDuration("auth.spf.timeout"),
+				CacheTTL: viper.GetDuration("auth.spf.cache_ttl"),
+			},
+			DKIM: DKIMConfig{
+				Enabled: viper.GetBool("auth.dkim.enabled"),
+				Timeout: viper.GetDuration("auth.dkim.timeout"),
+			},
+		},
+		Scoring: ScoringConfig{
+			RejectThreshold:     viper.GetFloat64("scoring.reject_threshold"),
+			QuarantineThreshold: viper.GetFloat64("scoring.quarantine_threshold"),
+		},
 	}
 
 	return cfg, nil
