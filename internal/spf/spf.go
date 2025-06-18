@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	mdns "github.com/miekg/dns"
@@ -60,7 +61,12 @@ func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types
 		}
 	}
 
-	timeout := cfg.Auth.SPF.Timeout
+	var timeout time.Duration
+	var ttl time.Duration
+	if cfg != nil {
+		timeout = cfg.Auth.SPF.Timeout
+		ttl = cfg.Auth.SPF.CacheTTL
+	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -74,8 +80,8 @@ func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types
 	res.Explanation = r.Explanation
 	res.Score = scoreFor(res.Result)
 
-	if rdb != nil {
-		_ = rdb.Set(ctx, cacheKey, res.Result, cfg.Auth.SPF.CacheTTL).Err()
+	if rdb != nil && ttl > 0 {
+		_ = rdb.Set(ctx, cacheKey, res.Result, ttl).Err()
 	}
 
 	return res, nil
