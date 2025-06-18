@@ -4,18 +4,25 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
+	"net/textproto"
+	"sync"
 
 	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-milter"
 	"github.com/mail-cci/antispam/pkg/helpers"
 	"go.uber.org/zap"
-	"net"
-	"net/textproto"
-	"sync"
 )
+
+type Store interface {
+	SaveEmail(*Email) (int64, error)
+	SaveSpamScore(int64, string, float64, float64, bool) error
+	QuarantineEmail(int64, string) error
+}
 
 type Email struct {
 	logger      *zap.Logger
+	store       Store
 	id          string
 	sender      string
 	from        string
@@ -34,9 +41,31 @@ type Attachment struct {
 	Data        []byte
 }
 
+// ID returns the correlation ID for the email.
+func (e *Email) ID() string { return e.id }
+
+// From returns the envelope sender address.
+func (e *Email) From() string { return e.from }
+
+// ClientAddr returns the connecting client's IP address.
+func (e *Email) ClientAddr() string { return e.client["addr"] }
+
+// Helo returns the HELO/EHLO name used by the client.
+func (e *Email) Helo() string { return e.helo }
+
+// Headers returns the collected headers.
+func (e *Email) Headers() textproto.MIMEHeader { return e.headers }
+
+// Body returns the message body as a string.
+func (e *Email) Body() string { return e.rawBody.String() }
+
+// Attachments returns the parsed attachments.
+func (e *Email) Attachments() []Attachment { return e.attachments }
+
 // Reset clears all fields so the Email instance can be reused.
 func (e *Email) Reset() {
 	e.logger = nil
+	e.store = nil
 	e.id = ""
 	e.sender = ""
 	e.from = ""
@@ -52,10 +81,11 @@ var emailPool = sync.Pool{
 	New: func() interface{} { return new(Email) },
 }
 
-func MailProcessor(logger *zap.Logger) *Email {
+func MailProcessor(logger *zap.Logger, store Store) *Email {
 	e := emailPool.Get().(*Email)
 	e.Reset()
 	e.logger = logger
+	e.store = store
 	e.client = make(map[string]string)
 	e.headers = make(textproto.MIMEHeader)
 	return e
@@ -78,6 +108,7 @@ func (e *Email) Connect(host string, family string, port uint16, addr net.IP, m 
 }
 
 func (e *Email) Helo(name string, m *milter.Modifier) (milter.Response, error) {
+	e.helo = name
 	e.logger.Debug("[cci-spam-inbound-prefilter] - Helo: ",
 		zap.String("name", name),
 		zap.String("correlation_id", e.id),
@@ -182,6 +213,18 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				ContentType: ctype,
 				Data:        data,
 			})
+		}
+	}
+
+	if e.store != nil {
+		id, err := e.store.SaveEmail(e)
+		if err != nil {
+			e.logger.Error("failed to store email", zap.Error(err))
+			return milter.RespTempFail, nil
+		}
+		// placeholder spam score
+		if err := e.store.SaveSpamScore(id, "none", 0, 0, false); err != nil {
+			e.logger.Error("failed to store spam score", zap.Error(err))
 		}
 	}
 

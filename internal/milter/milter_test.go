@@ -11,7 +11,7 @@ import (
 
 func TestEmailParsing(t *testing.T) {
 	logger := zap.NewNop()
-	e := MailProcessor(logger)
+	e := MailProcessor(logger, nil)
 	defer e.Close()
 
 	hdr := textproto.MIMEHeader{}
@@ -59,7 +59,7 @@ func TestEmailParsing(t *testing.T) {
 
 func TestBodyChunkShort(t *testing.T) {
 	logger := zap.NewNop()
-	e := MailProcessor(logger)
+	e := MailProcessor(logger, nil)
 	defer e.Close()
 
 	defer func() {

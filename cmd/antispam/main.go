@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+
 	"github.com/emersion/go-milter"
 	"github.com/mail-cci/antispam/internal/api"
 	"github.com/mail-cci/antispam/internal/config"
 	milt "github.com/mail-cci/antispam/internal/milter"
+	"github.com/mail-cci/antispam/internal/storage"
 	"github.com/mail-cci/antispam/pkg/logger"
 	"go.uber.org/zap"
 	"net"
@@ -18,6 +21,7 @@ import (
 var (
 	cfg         *config.Config
 	ctx, cancel = context.WithCancel(context.Background())
+	db          *sql.DB
 )
 
 func main() {
@@ -52,7 +56,14 @@ func main() {
 
 	zap.ReplaceGlobals(log)
 
-	go startMilterServer(log)
+	db, err = storage.New(cfg.DatabaseURL, cfg.MaxDBConnections)
+	if err != nil {
+		log.Fatal("failed to connect database", zap.Error(err))
+	}
+	defer db.Close()
+	store := storage.NewStore(db)
+
+	go startMilterServer(log, store)
 	go startHTTPServer(log)
 
 	log.Info("Application started",
@@ -87,10 +98,10 @@ func main() {
 	}
 }
 
-func startMilterServer(log *zap.Logger) {
+func startMilterServer(log *zap.Logger, store *storage.Store) {
 	server := milter.Server{
 		NewMilter: func() milter.Milter {
-			return milt.MailProcessor(log.With(zap.String("component", "milter")))
+			return milt.MailProcessor(log.With(zap.String("component", "milter")), store)
 		},
 		Actions: milter.OptAddHeader | milter.OptChangeHeader | milter.OptChangeFrom,
 	}
