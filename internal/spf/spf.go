@@ -6,10 +6,9 @@ import (
 	"net"
 	"strings"
 
-	"github.com/emersion/go-msgauth/dns"
-	"github.com/emersion/go-msgauth/spf"
 	"github.com/go-redis/redis/v8"
-	miekgdns "github.com/miekg/dns"
+	mdns "github.com/miekg/dns"
+	"github.com/wttw/spf"
 
 	"github.com/mail-cci/antispam/internal/config"
 	"github.com/mail-cci/antispam/internal/types"
@@ -65,15 +64,13 @@ func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// DNS resolver using miekg/dns
-	resolver := dns.MiekgDNSResolver{Client: &miekgdns.Client{}}
-
-	r, err := spf.CheckHost(cctx, clientIP, domain, sender, resolver, spf.Policy{})
-	if err != nil {
-		return nil, err
+	checker := spf.NewChecker()
+	r := checker.CheckHost(cctx, clientIP, mdns.Fqdn(domain), sender, "")
+	if r.Error != nil {
+		return nil, r.Error
 	}
 
-	res.Result = r.Result.String()
+	res.Result = r.Type.String()
 	res.Explanation = r.Explanation
 	res.Score = scoreFor(res.Result)
 
