@@ -72,9 +72,14 @@ func ipNetContains(ip net.IP, network net.IP, mask int) bool {
 	return n.Contains(ip)
 }
 
-// lookupTXT resolves TXT records for domain using miekg/dns to respect context
-// deadlines. It returns the records and the lowest TTL observed.
-func lookupTXT(ctx context.Context, domain string) ([]string, uint32, error) {
+// txtLookup resolves TXT records for domain. It can be overridden in tests to
+// avoid network calls. By default it points to defaultLookupTXT.
+var txtLookup = defaultLookupTXT
+
+// defaultLookupTXT resolves TXT records for domain using miekg/dns to respect
+// context deadlines. It returns the records along with the lowest TTL observed
+// for those records.
+func defaultLookupTXT(ctx context.Context, domain string) ([]string, uint32, error) {
 	conf, err := mdns.ClientConfigFromFile("/etc/resolv.conf")
 	if err != nil || len(conf.Servers) == 0 {
 		return nil, 0, err
@@ -131,7 +136,7 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 
 	// Buscar registros TXT
 	logger.Debug("buscando registros TXT", zap.String("domain", domain))
-	txts, ttl, err := lookupTXT(ctx, domain)
+	txts, ttl, err := txtLookup(ctx, domain)
 	if err != nil {
 		logger.Error("error al buscar TXT records",
 			zap.String("domain", domain),
@@ -253,14 +258,20 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 
 		case "include":
 			inc := val
-			r, _, err := checkSPF(logger, ctx, ip, inc, sender, depth+1)
+			r, childTTL, err := checkSPF(logger, ctx, ip, inc, sender, depth+1)
+			if childTTL > 0 && (ttl == 0 || childTTL < ttl) {
+				ttl = childTTL
+			}
 			if err == nil && r == "pass" {
 				return qualifierResult(q), ttl, nil
 			}
 
 		case "redirect":
 			red := val
-			result, _, err := checkSPF(logger, ctx, ip, red, sender, depth+1)
+			result, childTTL, err := checkSPF(logger, ctx, ip, red, sender, depth+1)
+			if childTTL > 0 && (ttl == 0 || childTTL < ttl) {
+				ttl = childTTL
+			}
 			return result, ttl, err
 
 		case "all":

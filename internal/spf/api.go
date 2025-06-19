@@ -9,7 +9,9 @@ import (
 )
 
 // Check evaluates SPF for the given IP, domain and sender.
-// It returns the resulting SPFResult without performing any caching.
+// It returns an SPFResult without performing any caching. The RecordTTL field
+// contains the minimum TTL observed while evaluating the domain and any
+// included or redirected SPF records.
 func Check(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender string) (types.SPFResult, error) {
 	res := types.SPFResult{Domain: domain}
 	r, ttl, err := checkSPF(logger, ctx, ip, domain, sender, 0)
