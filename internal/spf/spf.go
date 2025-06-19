@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/go-redis/redis/v8"
-	mdns "github.com/miekg/dns"
-	"github.com/wttw/spf"
 
 	"github.com/mail-cci/antispam/internal/config"
 	"github.com/mail-cci/antispam/internal/types"
@@ -45,7 +43,7 @@ func scoreFor(result string) float64 {
 	}
 }
 
-// Verify checks the SPF record for the given sender using go-msgauth.
+// Verify checks the SPF record for the given sender using new Go implementation.
 // It returns the SPF result along with a score mapped from that result.
 func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types.SPFResult, error) {
 	res := &types.SPFResult{Domain: domain}
@@ -64,15 +62,14 @@ func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	checker := spf.NewChecker()
-	r := checker.CheckHost(cctx, clientIP, mdns.Fqdn(domain), sender, "")
-	if r.Error != nil {
-		return nil, r.Error
+	r, err := Check(cctx, clientIP, domain, sender)
+	if err != nil {
+		return nil, err
 	}
 
-	res.Result = r.Type.String()
+	res.Result = r.Result
 	res.Explanation = r.Explanation
-	res.Score = scoreFor(res.Result)
+	res.Score = r.Score
 
 	if rdb != nil {
 		_ = rdb.Set(ctx, cacheKey, res.Result, cfg.Auth.SPF.CacheTTL).Err()
