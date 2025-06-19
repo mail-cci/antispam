@@ -2,6 +2,7 @@ package helpers
 
 import (
 	uuid "github.com/satori/go.uuid"
+	"regexp"
 	"strings"
 )
 
@@ -17,12 +18,25 @@ func GenerateCorrelationID() string {
 	return uuid.NewV4().String()
 }
 
-//func ValidSender(sender string) bool {
-// Regular expression for validating an email address based on SMTP RFC
-//const emailRegex = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
-//re := regexp.MustCompile(emailRegex)
-//return re.MatchString(sender)
-//}
+func isValidDomain(domain string) bool {
+	if domain == "" {
+		return false
+	}
+	
+	domainRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
+
+	if len(domain) > 253 {
+		return false
+	}
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	if strings.Contains(domain, "..") {
+		return false
+	}
+
+	return domainRegex.MatchString(domain)
+}
 
 func ValidSender(sender string) bool {
 	parts := strings.Split(sender, "@")

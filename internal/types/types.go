@@ -1,11 +1,18 @@
 package types
 
+// SPFLookupResult represents the result of an SPF lookup.
+type SPFLookupResult struct {
+	Result string
+	TTL    uint32 // Time to live for the SPF record
+}
+
 // SPFResult holds information about SPF check results.
 type SPFResult struct {
 	Result      string
 	Domain      string
 	Explanation string
 	Score       float64
+	RecordTTL   uint32 // TTL of the SPF record
 }
 
 // DKIMResult represents DKIM verification outcomes.
