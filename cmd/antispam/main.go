@@ -6,7 +6,10 @@ import (
 	"github.com/emersion/go-milter"
 	"github.com/mail-cci/antispam/internal/api"
 	"github.com/mail-cci/antispam/internal/config"
+	"github.com/mail-cci/antispam/internal/dkim"
 	milt "github.com/mail-cci/antispam/internal/milter"
+	"github.com/mail-cci/antispam/internal/scoring"
+	"github.com/mail-cci/antispam/internal/spf"
 	"github.com/mail-cci/antispam/pkg/logger"
 	"go.uber.org/zap"
 	"net"
@@ -51,6 +54,12 @@ func main() {
 	}()
 
 	zap.ReplaceGlobals(log)
+
+	// Initialize modules with configuration
+	log.Info("Initializing modules")
+	spf.Init(cfg)
+	dkim.Init(cfg)
+	scoring.Init(cfg)
 
 	go startMilterServer(log)
 	go startHTTPServer(log)

@@ -6,6 +6,7 @@ type SPFResult struct {
 	Domain      string
 	Explanation string
 	Score       float64
+	RecordTTL   uint32 // TTL of the SPF record
 }
 
 // DKIMResult represents DKIM verification outcomes.

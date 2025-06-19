@@ -3,6 +3,7 @@ package spf
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"net"
 	"strings"
 
@@ -45,7 +46,7 @@ func scoreFor(result string) float64 {
 
 // Verify checks the SPF record for the given sender using new Go implementation.
 // It returns the SPF result along with a score mapped from that result.
-func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types.SPFResult, error) {
+func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, sender string) (*types.SPFResult, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("SPF verification not initialized")
 	}
@@ -58,6 +59,7 @@ func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types
 		if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 			res.Result = val
 			res.Score = scoreFor(val)
+			logger.Debug("SPF cache hit", zap.String("key", cacheKey), zap.String("result", res.Result))
 			return res, nil
 		}
 	}
@@ -66,7 +68,7 @@ func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	r, err := Check(cctx, clientIP, domain, sender)
+	r, err := Check(logger, cctx, clientIP, domain, sender)
 	if err != nil {
 		return nil, err
 	}
