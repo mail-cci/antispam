@@ -46,6 +46,10 @@ func scoreFor(result string) float64 {
 // Verify checks the SPF record for the given sender using new Go implementation.
 // It returns the SPF result along with a score mapped from that result.
 func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types.SPFResult, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("SPF verification not initialized")
+	}
+
 	res := &types.SPFResult{Domain: domain}
 
 	// attempt cache lookup

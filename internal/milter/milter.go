@@ -2,11 +2,18 @@ package milt
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"time"
+
+	_ "github.com/emersion/go-message/charset"
 
 	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-milter"
+	"github.com/mail-cci/antispam/internal/scoring"
+	"github.com/mail-cci/antispam/internal/spf"
+	"github.com/mail-cci/antispam/internal/types"
 	"github.com/mail-cci/antispam/pkg/helpers"
 	"go.uber.org/zap"
 	"net"
@@ -25,6 +32,10 @@ type Email struct {
 	headers     textproto.MIMEHeader
 	rawBody     bytes.Buffer
 	attachments []Attachment
+	clientIP    net.IP
+	heloHost    string
+	recipients  []string
+	rawEmail    bytes.Buffer
 }
 
 // Attachment stores metadata and content for an email attachment.
@@ -46,6 +57,10 @@ func (e *Email) Reset() {
 	e.headers = nil
 	e.rawBody.Reset()
 	e.attachments = nil
+	e.clientIP = nil
+	e.heloHost = ""
+	e.recipients = nil
+	e.rawEmail.Reset()
 }
 
 var emailPool = sync.Pool{
@@ -67,6 +82,7 @@ func (e *Email) Connect(host string, family string, port uint16, addr net.IP, m 
 	e.client["family"] = family
 	e.client["port"] = fmt.Sprintf("%d", port)
 	e.client["addr"] = addr.String()
+	e.clientIP = addr
 	e.logger.Debug("[cci-spam-inbound-prefilter] - Connect: ",
 		zap.String("host", host),
 		zap.String("family", family),
@@ -82,6 +98,7 @@ func (e *Email) Helo(name string, m *milter.Modifier) (milter.Response, error) {
 		zap.String("name", name),
 		zap.String("correlation_id", e.id),
 		zap.String("type", "helo/ehlo"))
+	e.heloHost = name
 	return milter.RespContinue, nil
 }
 
@@ -99,6 +116,7 @@ func (e *Email) RcptTo(rcptTo string, m *milter.Modifier) (milter.Response, erro
 		zap.String("rcpt_to", rcptTo),
 		zap.String("correlation_id", e.id),
 		zap.String("type", "rcpt_to"))
+	e.recipients = append(e.recipients, rcptTo)
 	return milter.RespContinue, nil
 }
 
@@ -131,28 +149,29 @@ func (e *Email) BodyChunk(chunk []byte, m *milter.Modifier) (milter.Response, er
 		zap.String("correlation_id", e.id),
 		zap.String("type", "body_chunk"))
 	e.rawBody.Write(chunk)
+	e.rawEmail.Write(chunk)
 	return milter.RespContinue, nil
 }
 
 func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
+	start := time.Now()
 	e.logger.Debug("[cci-spam-inbound-prefilter] - Body: ",
 		zap.String("correlation_id", e.id),
 		zap.String("type", "body"))
 
-	var raw bytes.Buffer
-	// Reconstruct full email from headers and collected body
+	e.rawEmail.Reset()
 	for k, vv := range e.headers {
 		for _, v := range vv {
-			fmt.Fprintf(&raw, "%s: %s\r\n", k, v)
+			fmt.Fprintf(&e.rawEmail, "%s: %s\r\n", k, v)
 		}
 	}
-	raw.WriteString("\r\n")
-	raw.Write(e.rawBody.Bytes())
+	e.rawEmail.WriteString("\r\n")
+	e.rawEmail.Write(e.rawBody.Bytes())
 
-	mr, err := mail.CreateReader(&raw)
+	mr, err := mail.CreateReader(bytes.NewReader(e.rawEmail.Bytes()))
 	if err != nil {
 		e.logger.Error("failed to parse email", zap.Error(err))
-		return milter.RespTempFail, nil
+		return milter.RespContinue, nil
 	}
 
 	for {
@@ -162,7 +181,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		}
 		if err != nil {
 			e.logger.Error("error reading MIME part", zap.Error(err))
-			return milter.RespTempFail, nil
+			return milter.RespContinue, nil
 		}
 
 		switch h := p.Header.(type) {
@@ -185,6 +204,70 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		}
 	}
 
+	ctx := context.Background()
+	domain := helpers.ExtractDomain(e.from)
+
+	if domain == "" {
+		e.logger.Error("invalid domain extracted from sender", zap.String("from", e.from))
+		return milter.RespContinue, nil
+	}
+
+	if e.clientIP == nil {
+		e.logger.Error("client IP is nil")
+		return milter.RespContinue, nil
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var spfRes *types.SPFResult
+
+	go func() {
+		defer wg.Done()
+		res, err := spf.Verify(ctx, e.clientIP, domain, e.from)
+		if err != nil {
+			e.logger.Error("spf verification failed", zap.Error(err))
+			return
+		}
+		spfRes = res
+	}()
+
+	wg.Wait()
+
+	var total float64
+	if spfRes != nil {
+		total += spfRes.Score
+	}
+
+	decision := scoring.Decide(total)
+
+	if m != nil {
+		m.AddHeader("X-Spam-Score", fmt.Sprintf("%.2f", total))
+		if spfRes != nil {
+			m.AddHeader("X-SPF-Result", spfRes.Result)
+		} else {
+			m.AddHeader("X-SPF-Result", "")
+		}
+		m.AddHeader("X-Spam-Status", decision)
+		if decision == "quarantine" {
+			m.AddHeader("X-Spam-Flag", "YES")
+		}
+	}
+
+	e.logger.Info("email processed",
+		zap.String("message_id", e.headers.Get("Message-ID")),
+		zap.String("from", e.from),
+		zap.Strings("recipients", e.recipients),
+		zap.String("ip", e.clientIP.String()),
+		zap.Any("spf", spfRes),
+		zap.Float64("total", total),
+		zap.String("decision", decision),
+		zap.Duration("duration", time.Since(start)),
+	)
+
+	if decision == "reject" {
+		return milter.RespContinue, nil
+	}
 	return milter.RespAccept, nil
 }
 
