@@ -119,21 +119,14 @@ func parseMechanism(tok string) (q byte, name, val string) {
 	return
 }
 
-func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender string, depth int) (string, error) {
-	// Log inicio de validación
-	logger.Debug("iniciando validación SPF",
-		zap.String("domain", domain),
-		zap.String("ip", ip.String()),
-		zap.String("sender", sender),
-		zap.Int("depth", depth),
-	)
+func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender string, depth int) (string, uint32, error) {
 
 	if depth > maxRecursiveDepth {
 		logger.Error("límite de recursión SPF alcanzado",
 			zap.Int("depth", depth),
 			zap.String("domain", domain),
 		)
-		return "permerror", errors.New("spf recursion limit reached")
+		return "permerror", 0, errors.New("spf recursion limit reached")
 	}
 
 	// Buscar registros TXT
@@ -144,53 +137,26 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 			zap.String("domain", domain),
 			zap.Error(err),
 		)
-		return "temperror", err
+		return "temperror", 0, err
 	}
-
-	logger.Debug("registros TXT encontrados",
-		zap.String("domain", domain),
-		zap.Strings("records", txts),
-		zap.Uint32("ttl", ttl),
-		zap.Int("count", len(txts)),
-	)
 
 	// Buscar registro SPF
 	var record string
 	for _, t := range txts {
 		if strings.HasPrefix(strings.ToLower(t), "v=spf1") {
 			record = t
-			logger.Debug("registro SPF encontrado",
-				zap.String("domain", domain),
-				zap.String("record", record),
-			)
 			break
 		}
 	}
 
 	if record == "" {
-		logger.Debug("no se encontró registro SPF",
-			zap.String("domain", domain),
-		)
-		return "none", nil
+		return "none", 0, nil
 	}
 
 	parts := strings.Fields(record)
-	logger.Debug("procesando mecanismos SPF",
-		zap.String("domain", domain),
-		zap.Int("mechanisms_count", len(parts)-1),
-	)
 
-	for i, tok := range parts[1:] { // skip v=spf1
+	for _, tok := range parts[1:] { // skip v=spf1
 		q, mech, val := parseMechanism(tok)
-
-		logger.Debug("procesando mecanismo",
-			zap.Int("position", i),
-			zap.String("token", tok),
-			zap.String("mechanism", mech),
-			zap.String("value", val),
-			zap.String("qualifier", string(q)),
-			zap.String("qualifier_result", qualifierResult(q)),
-		)
 
 		switch mech {
 		case "ip4":
@@ -207,26 +173,14 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 				}
 			}
 
-			logger.Debug("evaluando mecanismo ip4",
-				zap.String("network", ipstr),
-				zap.Int("mask", mask),
-				zap.String("checking_ip", ip.String()),
-				zap.Bool("is_ipv4", ip.To4() != nil),
-			)
-
 			if ip.To4() != nil && ipNetContains(ip, network, mask) {
 				logger.Info("ip4 match encontrado",
 					zap.String("ip", ip.String()),
 					zap.String("network", fmt.Sprintf("%s/%d", ipstr, mask)),
 					zap.String("result", qualifierResult(q)),
 				)
-				return qualifierResult(q), nil
+				return qualifierResult(q), ttl, nil
 			}
-
-			logger.Debug("ip4 no match",
-				zap.String("ip", ip.String()),
-				zap.String("network", fmt.Sprintf("%s/%d", ipstr, mask)),
-			)
 
 		case "ip6":
 			ipstr, maskstr := val, ""
@@ -242,37 +196,15 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 				}
 			}
 
-			logger.Debug("evaluando mecanismo ip6",
-				zap.String("network", ipstr),
-				zap.Int("mask", mask),
-				zap.String("checking_ip", ip.String()),
-				zap.Bool("is_ipv6", ip.To4() == nil),
-			)
-
 			if ip.To4() == nil && ipNetContains(ip, network, mask) {
-				logger.Info("ip6 match encontrado",
-					zap.String("ip", ip.String()),
-					zap.String("network", fmt.Sprintf("%s/%d", ipstr, mask)),
-					zap.String("result", qualifierResult(q)),
-				)
-				return qualifierResult(q), nil
+				return qualifierResult(q), ttl, nil
 			}
-
-			logger.Debug("ip6 no match",
-				zap.String("ip", ip.String()),
-				zap.String("network", fmt.Sprintf("%s/%d", ipstr, mask)),
-			)
 
 		case "a":
 			host := val
 			if host == "" {
 				host = domain
 			}
-
-			logger.Debug("evaluando mecanismo 'a'",
-				zap.String("host", host),
-				zap.String("checking_ip", ip.String()),
-			)
 
 			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 			if err != nil {
@@ -281,25 +213,9 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 					zap.Error(err),
 				)
 			} else {
-				logger.Debug("A records encontrados",
-					zap.String("host", host),
-					zap.Int("count", len(ips)),
-				)
-
 				for _, h := range ips {
-					logger.Debug("comparando con A record",
-						zap.String("a_record_ip", h.String()),
-						zap.String("checking_ip", ip.String()),
-						zap.Bool("match", h.Equal(ip)),
-					)
-
 					if h.Equal(ip) {
-						logger.Info("A record match encontrado",
-							zap.String("host", host),
-							zap.String("ip", ip.String()),
-							zap.String("result", qualifierResult(q)),
-						)
-						return qualifierResult(q), nil
+						return qualifierResult(q), ttl, nil
 					}
 				}
 			}
@@ -310,11 +226,6 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 				host = domain
 			}
 
-			logger.Debug("evaluando mecanismo 'mx'",
-				zap.String("host", host),
-				zap.String("checking_ip", ip.String()),
-			)
-
 			mxs, err := net.DefaultResolver.LookupMX(ctx, host)
 			if err != nil {
 				logger.Warn("error resolviendo MX records",
@@ -322,17 +233,7 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 					zap.Error(err),
 				)
 			} else {
-				logger.Debug("MX records encontrados",
-					zap.String("host", host),
-					zap.Int("count", len(mxs)),
-				)
-
 				for _, mx := range mxs {
-					logger.Debug("procesando MX record",
-						zap.String("mx_host", mx.Host),
-						zap.Uint16("priority", mx.Pref),
-					)
-
 					ips, err := net.DefaultResolver.LookupIP(ctx, "ip", mx.Host)
 					if err != nil {
 						logger.Warn("error resolviendo IPs de MX",
@@ -343,21 +244,8 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 					}
 
 					for _, h := range ips {
-						logger.Debug("comparando con MX IP",
-							zap.String("mx_host", mx.Host),
-							zap.String("mx_ip", h.String()),
-							zap.String("checking_ip", ip.String()),
-							zap.Bool("match", h.Equal(ip)),
-						)
-
 						if h.Equal(ip) {
-							logger.Info("MX match encontrado",
-								zap.String("host", host),
-								zap.String("mx_host", mx.Host),
-								zap.String("ip", ip.String()),
-								zap.String("result", qualifierResult(q)),
-							)
-							return qualifierResult(q), nil
+							return qualifierResult(q), ttl, nil
 						}
 					}
 				}
@@ -365,49 +253,18 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 
 		case "include":
 			inc := val
-			logger.Debug("evaluando mecanismo 'include'",
-				zap.String("include_domain", inc),
-				zap.Int("current_depth", depth),
-			)
-
-			r, err := checkSPF(logger, ctx, ip, inc, sender, depth+1)
-
-			logger.Debug("resultado de include",
-				zap.String("include_domain", inc),
-				zap.String("result", r),
-				zap.Error(err),
-			)
-
+			r, _, err := checkSPF(logger, ctx, ip, inc, sender, depth+1)
 			if err == nil && r == "pass" {
-				logger.Info("include match encontrado",
-					zap.String("include_domain", inc),
-					zap.String("result", qualifierResult(q)),
-				)
-				return qualifierResult(q), nil
+				return qualifierResult(q), ttl, nil
 			}
 
 		case "redirect":
 			red := val
-			logger.Debug("procesando redirect",
-				zap.String("redirect_domain", red),
-				zap.Int("current_depth", depth),
-			)
-
-			result, err := checkSPF(logger, ctx, ip, red, sender, depth+1)
-
-			logger.Debug("resultado de redirect",
-				zap.String("redirect_domain", red),
-				zap.String("result", result),
-				zap.Error(err),
-			)
-
-			return result, err
+			result, _, err := checkSPF(logger, ctx, ip, red, sender, depth+1)
+			return result, ttl, err
 
 		case "all":
-			logger.Info("mecanismo 'all' alcanzado",
-				zap.String("result", qualifierResult(q)),
-			)
-			return qualifierResult(q), nil
+			return qualifierResult(q), ttl, nil
 
 		default:
 			logger.Warn("mecanismo SPF no soportado",
@@ -416,9 +273,5 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 			)
 		}
 	}
-
-	logger.Debug("fin de mecanismos SPF sin match, retornando neutral",
-		zap.String("domain", domain),
-	)
-	return "neutral", nil
+	return "neutral", 0, nil
 }

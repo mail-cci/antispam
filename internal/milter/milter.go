@@ -173,28 +173,67 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	}
 
 	ctx := context.Background()
-	domain := helpers.ExtractDomain(e.from)
 
-	if domain == "" {
-		e.logger.Error("Invalid domain in 'From' address", zap.String("from", e.from))
+	// Manejo especial para bounces (from vacío o <>)
+	var spfDomain string
+	var isBounceMail bool
+
+	if e.from == "" || e.from == "<>" {
+		// Para bounces, usar el dominio del HELO
+		isBounceMail = true
+		spfDomain = e.heloHost
+		e.logger.Info("Bounce detected, using HELO domain for SPF validation",
+			zap.String("helo_host", e.heloHost),
+			zap.String("from", e.from),
+		)
+	} else {
+		// Para emails normales, extraer dominio del FROM
+		spfDomain = helpers.ExtractDomain(e.from)
+	}
+
+	if spfDomain == "" {
+		if isBounceMail {
+			e.logger.Error("Invalid HELO domain for bounce message",
+				zap.String("helo_host", e.heloHost),
+				zap.String("from", e.from),
+				zap.String("client_host", e.client["host"]),
+				zap.String("client_addr", e.client["addr"]))
+		} else {
+			e.logger.Error("Invalid domain in 'From' address",
+				zap.String("from", e.from),
+				zap.String("client_host", e.client["host"]),
+				zap.String("client_addr", e.client["addr"]))
+		}
 		return milter.RespContinue, nil
 	}
 
 	if e.clientIP == nil {
 		e.logger.Error("Client IP is nil", zap.String("from", e.from))
+		e.logger.Error("Client IP details", zap.String("host", e.client["host"]), zap.String("addr", e.client["addr"]))
 		return milter.RespContinue, nil
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 
 	var spfRes *types.SPFResult
 
 	go func() {
 		defer wg.Done()
-		res, err := spf.Verify(e.logger, ctx, e.clientIP, domain, e.from)
+
+		// Para bounces, usar el HELO host en lugar del sender para SPF
+		senderForSPF := e.from
+		if isBounceMail {
+			senderForSPF = "" // Para bounces, el sender efectivo es vacío
+		}
+
+		res, err := spf.Verify(e.logger, ctx, e.clientIP, spfDomain, senderForSPF)
 		if err != nil {
-			e.logger.Error("Error verifying SPF", zap.Error(err), zap.String("domain", domain), zap.String("from", e.from))
+			e.logger.Error("Error verifying SPF",
+				zap.Error(err),
+				zap.String("domain", spfDomain),
+				zap.String("from", e.from),
+				zap.Bool("is_bounce", isBounceMail))
 			return
 		}
 		spfRes = res
@@ -237,6 +276,11 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		}
 	}
 
+	spfResult := ""
+	if spfRes != nil {
+		spfResult = spfRes.Result
+	}
+
 	e.logger.Info("[cci-spam-inbound-prefilter] - Processed email",
 		zap.String("message_id", e.headers.Get("Message-ID")),
 		zap.String("from", e.from),
@@ -247,7 +291,9 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		zap.String("decision", decision),
 		zap.Duration("duration", time.Since(start)),
 		zap.String("correlation_id", e.id),
-		zap.String("spf_result", spfRes.Result),
+		zap.String("spf_result", spfResult),
+		zap.Bool("is_bounce", isBounceMail),
+		zap.String("spf_domain", spfDomain),
 	)
 
 	if decision == "reject" {

@@ -6,6 +6,7 @@ import (
 	"go.uber.org/zap"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 
@@ -78,7 +79,7 @@ func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, se
 	res.Score = r.Score
 
 	if rdb != nil {
-		_ = rdb.Set(ctx, cacheKey, res.Result, cfg.Auth.SPF.CacheTTL).Err()
+		_ = rdb.Set(ctx, cacheKey, res.Result, time.Duration(r.RecordTTL)*time.Second).Err()
 	}
 
 	return res, nil
