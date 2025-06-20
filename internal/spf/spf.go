@@ -77,6 +77,7 @@ func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, se
 	res.Result = r.Result
 	res.Explanation = r.Explanation
 	res.Score = r.Score
+	res.RecordTTL = r.RecordTTL
 
 	if rdb != nil {
 		_ = rdb.Set(ctx, cacheKey, res.Result, time.Duration(r.RecordTTL)*time.Second).Err()

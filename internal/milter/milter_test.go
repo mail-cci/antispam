@@ -1,6 +1,7 @@
 package milt
 
 import (
+	"net"
 	"net/textproto"
 	"strings"
 	"testing"
@@ -13,6 +14,11 @@ func TestEmailParsing(t *testing.T) {
 	logger := zap.NewNop()
 	e := MailProcessor(logger)
 	defer e.Close()
+
+	// provide client information so SPF checks do not short-circuit
+	_, _ = e.Connect("localhost", "tcp4", 25, net.ParseIP("127.0.0.1"), nil)
+	_, _ = e.Helo("localhost", nil)
+	_, _ = e.MailFrom("a@b", nil)
 
 	hdr := textproto.MIMEHeader{}
 	hdr.Add("From", "a@b")
