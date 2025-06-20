@@ -56,7 +56,7 @@ func TestReceivedSPFHeaderAdded(t *testing.T) {
 		Auth: config.AuthConfig{SPF: config.SPFConfig{Timeout: time.Second}},
 	}
 	oldCfg := spfCfg
-	spf.Init(cfg)
+	spf.Init(cfg, zap.NewNop())
 	// stub TXT lookups to return pass record
 	setTxtLookup(func(ctx context.Context, domain string) ([]string, uint32, error) {
 		return []string{"v=spf1 +all"}, 600, nil
@@ -66,7 +66,8 @@ func TestReceivedSPFHeaderAdded(t *testing.T) {
 		spfCfg = oldCfg
 	}()
 
-	e := MailProcessor(logger)
+	Init(logger)
+	e := MailProcessor()
 	defer e.Close()
 
 	_, _ = e.Connect("localhost", "tcp4", 25, net.ParseIP("127.0.0.1"), nil)

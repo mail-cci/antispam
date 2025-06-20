@@ -12,7 +12,8 @@ import (
 
 func TestEmailParsing(t *testing.T) {
 	logger := zap.NewNop()
-	e := MailProcessor(logger)
+	Init(logger)
+	e := MailProcessor()
 	defer e.Close()
 
 	// provide client information so SPF checks do not short-circuit
@@ -65,7 +66,8 @@ func TestEmailParsing(t *testing.T) {
 
 func TestBodyChunkShort(t *testing.T) {
 	logger := zap.NewNop()
-	e := MailProcessor(logger)
+	Init(logger)
+	e := MailProcessor()
 	defer e.Close()
 
 	defer func() {

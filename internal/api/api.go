@@ -9,8 +9,14 @@ import (
 	"go.uber.org/zap"
 )
 
+var logger *zap.Logger
+
+func InitLogger(l *zap.Logger) {
+	logger = l
+}
+
 // NewServer creates and configures a new Gin server instance.
-func NewServer(cfg *config.Config, logger *zap.Logger) *gin.Engine {
+func NewServer(cfg *config.Config) *gin.Engine {
 	// Set Gin mode based on configuration
 	if cfg.Env == "production" {
 		gin.SetMode(gin.ReleaseMode)

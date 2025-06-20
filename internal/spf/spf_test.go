@@ -13,21 +13,21 @@ import (
 
 func TestVerify(t *testing.T) {
 	cfg := &config.Config{}
-	Init(cfg)
+	Init(cfg, zap.NewNop())
 
-	_, _ = Verify(zap.NewNop(), context.Background(), net.ParseIP("127.0.0.1"), "example.com", "user@example.com")
+	_, _ = Verify(context.Background(), net.ParseIP("127.0.0.1"), "example.com", "user@example.com")
 }
 
 func TestCheck(t *testing.T) {
 	cfg := &config.Config{}
-	Init(cfg)
+	Init(cfg, zap.NewNop())
 
-	_, _ = Check(zap.NewNop(), context.Background(), net.ParseIP("127.0.0.1"), "example.com", "user@example.com")
+	_, _ = Check(context.Background(), net.ParseIP("127.0.0.1"), "example.com", "user@example.com")
 }
 
 func TestTTLMinimumInclude(t *testing.T) {
 	cfg := &config.Config{}
-	Init(cfg)
+	Init(cfg, zap.NewNop())
 
 	// stub TXT lookups
 	oldLookup := txtLookup
@@ -43,7 +43,7 @@ func TestTTLMinimumInclude(t *testing.T) {
 	}
 	defer func() { txtLookup = oldLookup }()
 
-	res, err := Check(zap.NewNop(), context.Background(), net.ParseIP("1.2.3.4"), "parent.test", "user@parent.test")
+	res, err := Check(context.Background(), net.ParseIP("1.2.3.4"), "parent.test", "user@parent.test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestTTLMinimumInclude(t *testing.T) {
 
 func TestTTLMinimumRedirect(t *testing.T) {
 	cfg := &config.Config{}
-	Init(cfg)
+	Init(cfg, zap.NewNop())
 
 	oldLookup := txtLookup
 	txtLookup = func(ctx context.Context, domain string) ([]string, uint32, error) {
@@ -69,7 +69,7 @@ func TestTTLMinimumRedirect(t *testing.T) {
 	}
 	defer func() { txtLookup = oldLookup }()
 
-	res, err := Check(zap.NewNop(), context.Background(), net.ParseIP("1.2.3.4"), "parent2.test", "user@parent2.test")
+	res, err := Check(context.Background(), net.ParseIP("1.2.3.4"), "parent2.test", "user@parent2.test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestTTLMinimumRedirect(t *testing.T) {
 
 func TestVerifyMetrics(t *testing.T) {
 	cfg := &config.Config{}
-	Init(cfg)
+	Init(cfg, zap.NewNop())
 
 	oldLookup := txtLookup
 	txtLookup = func(ctx context.Context, domain string) ([]string, uint32, error) {
@@ -92,7 +92,7 @@ func TestVerifyMetrics(t *testing.T) {
 	startPass := testutil.ToFloat64(metrics.SPFCheckPass)
 	startFail := testutil.ToFloat64(metrics.SPFCheckFail)
 
-	_, err := Verify(zap.NewNop(), context.Background(), net.ParseIP("127.0.0.1"), "example.com", "user@example.com")
+	_, err := Verify(context.Background(), net.ParseIP("127.0.0.1"), "example.com", "user@example.com")
 	if err != nil {
 		t.Fatalf("Verify returned error: %v", err)
 	}

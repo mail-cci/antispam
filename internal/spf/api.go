@@ -2,7 +2,6 @@ package spf
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"net"
 
 	"github.com/mail-cci/antispam/internal/types"
@@ -12,9 +11,9 @@ import (
 // It returns an SPFResult without performing any caching. The RecordTTL field
 // contains the minimum TTL observed while evaluating the domain and any
 // included or redirected SPF records.
-func Check(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender string) (types.SPFResult, error) {
+func Check(ctx context.Context, ip net.IP, domain, sender string) (types.SPFResult, error) {
 	res := types.SPFResult{Domain: domain}
-	r, ttl, err := checkSPF(logger, ctx, ip, domain, sender, 0)
+	r, ttl, err := checkSPF(ctx, ip, domain, sender, 0)
 	if err != nil {
 		return res, err
 	}

@@ -124,7 +124,7 @@ func parseMechanism(tok string) (q byte, name, val string) {
 	return
 }
 
-func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender string, depth int) (string, uint32, error) {
+func checkSPF(ctx context.Context, ip net.IP, domain, sender string, depth int) (string, uint32, error) {
 
 	if depth > maxRecursiveDepth {
 		logger.Error("límite de recursión SPF alcanzado",
@@ -258,7 +258,7 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 
 		case "include":
 			inc := val
-			r, childTTL, err := checkSPF(logger, ctx, ip, inc, sender, depth+1)
+			r, childTTL, err := checkSPF(ctx, ip, inc, sender, depth+1)
 			if childTTL > 0 && (ttl == 0 || childTTL < ttl) {
 				ttl = childTTL
 			}
@@ -268,7 +268,7 @@ func checkSPF(logger *zap.Logger, ctx context.Context, ip net.IP, domain, sender
 
 		case "redirect":
 			red := val
-			result, childTTL, err := checkSPF(logger, ctx, ip, red, sender, depth+1)
+			result, childTTL, err := checkSPF(ctx, ip, red, sender, depth+1)
 			if childTTL > 0 && (ttl == 0 || childTTL < ttl) {
 				ttl = childTTL
 			}
