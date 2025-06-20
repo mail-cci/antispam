@@ -9,13 +9,18 @@ import (
 
 	"github.com/mail-cci/antispam/internal/config"
 	"github.com/mail-cci/antispam/internal/types"
+	"go.uber.org/zap"
 )
 
-var cfg *config.Config
+var (
+	cfg    *config.Config
+	logger *zap.Logger
+)
 
 // Init stores the application config for DKIM verification.
-func Init(c *config.Config) {
+func Init(c *config.Config, l *zap.Logger) {
 	cfg = c
+	logger = l
 }
 
 func scoreFor(valid bool) float64 {
@@ -29,6 +34,9 @@ func scoreFor(valid bool) float64 {
 // DKIMResult with Valid=true if at least one signature verifies correctly.
 func Verify(rawEmail []byte) (*types.DKIMResult, error) {
 	res := &types.DKIMResult{}
+	if logger != nil {
+		logger.Debug("verifying DKIM", zap.Int("size", len(rawEmail)))
+	}
 
 	// Setup a context with timeout for DNS lookups if configured.
 	ctx := context.Background()
@@ -65,5 +73,11 @@ func Verify(rawEmail []byte) (*types.DKIMResult, error) {
 	}
 
 	res.Score = scoreFor(res.Valid)
+	if logger != nil {
+		logger.Debug("dkim verification complete",
+			zap.Bool("valid", res.Valid),
+			zap.String("domain", res.Domain),
+		)
+	}
 	return res, nil
 }

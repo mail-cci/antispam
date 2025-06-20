@@ -15,13 +15,17 @@ import (
 	"github.com/mail-cci/antispam/internal/types"
 )
 
-var cfg *config.Config
-var rdb *redis.Client
+var (
+	cfg    *config.Config
+	rdb    *redis.Client
+	logger *zap.Logger
+)
 
 // Init configures the SPF verifier with application settings and
 // initializes the redis client. It can be called multiple times safely.
-func Init(c *config.Config) {
+func Init(c *config.Config, l *zap.Logger) {
 	cfg = c
+	logger = l
 	if cfg == nil || cfg.RedisURL == "" {
 		rdb = nil
 		return
@@ -48,7 +52,7 @@ func scoreFor(result string) float64 {
 
 // Verify checks the SPF record for the given sender using new Go implementation.
 // It returns the SPF result along with a score mapped from that result.
-func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, sender string) (*types.SPFResult, error) {
+func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types.SPFResult, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("SPF verification not initialized")
 	}
@@ -79,7 +83,7 @@ func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, se
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	r, err := Check(logger, cctx, clientIP, domain, sender)
+	r, err := Check(cctx, clientIP, domain, sender)
 	if err != nil {
 		metrics.SPFCheckFail.Inc()
 		metrics.SPFCheckDurationSeconds.Observe(time.Since(start).Seconds())

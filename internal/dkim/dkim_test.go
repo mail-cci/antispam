@@ -1,11 +1,14 @@
 package dkim
 
-import "testing"
-import "github.com/mail-cci/antispam/internal/config"
+import (
+	"github.com/mail-cci/antispam/internal/config"
+	"go.uber.org/zap"
+	"testing"
+)
 
 func TestVerify(t *testing.T) {
 	cfg := &config.Config{}
-	Init(cfg)
+	Init(cfg, zap.NewNop())
 
 	raw := []byte("From: sender@example.com\r\n\r\nbody")
 	_, _ = Verify(raw)

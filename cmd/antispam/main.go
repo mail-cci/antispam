@@ -21,6 +21,10 @@ import (
 var (
 	cfg         *config.Config
 	ctx, cancel = context.WithCancel(context.Background())
+	spfLog      *zap.Logger
+	dkimLog     *zap.Logger
+	milterLog   *zap.Logger
+	apiLog      *zap.Logger
 )
 
 func main() {
@@ -34,7 +38,7 @@ func main() {
 	//  logger
 	logConfig := logger.LogConfig{
 		Level:         cfg.LogLevel,
-		FilePath:      cfg.LogPath + "/mail.log",
+		FilePath:      cfg.LogPath + "/main.log",
 		MaxSizeMB:     100,
 		MaxBackups:    7,
 		MaxAgeDays:    30,
@@ -46,23 +50,60 @@ func main() {
 		fmt.Println("Error initializing logger:", err)
 		os.Exit(1)
 	}
+
+	spfLog, _ = logger.Init(logger.LogConfig{
+		Level:         cfg.LogLevel,
+		FilePath:      cfg.LogPath + "/spf.log",
+		MaxSizeMB:     100,
+		MaxBackups:    7,
+		MaxAgeDays:    30,
+		ConsoleOutput: cfg.Env == "development",
+	})
+
+	dkimLog, _ = logger.Init(logger.LogConfig{
+		Level:         cfg.LogLevel,
+		FilePath:      cfg.LogPath + "/dkim.log",
+		MaxSizeMB:     100,
+		MaxBackups:    7,
+		MaxAgeDays:    30,
+		ConsoleOutput: cfg.Env == "development",
+	})
+
+	milterLog, _ = logger.Init(logger.LogConfig{
+		Level:         cfg.LogLevel,
+		FilePath:      cfg.LogPath + "/milter.log",
+		MaxSizeMB:     100,
+		MaxBackups:    7,
+		MaxAgeDays:    30,
+		ConsoleOutput: cfg.Env == "development",
+	})
+
+	apiLog, _ = logger.Init(logger.LogConfig{
+		Level:         cfg.LogLevel,
+		FilePath:      cfg.LogPath + "/api.log",
+		MaxSizeMB:     100,
+		MaxBackups:    7,
+		MaxAgeDays:    30,
+		ConsoleOutput: cfg.Env == "development",
+	})
 	defer func() {
-		err := logger.Sync()
-		if err != nil {
-			log.Error("Error flushing logs", zap.Error(err))
-		}
+		_ = log.Sync()
+		_ = spfLog.Sync()
+		_ = dkimLog.Sync()
+		_ = milterLog.Sync()
+		_ = apiLog.Sync()
 	}()
 
 	zap.ReplaceGlobals(log)
 
 	// Initialize modules with configuration
 	log.Info("Initializing modules")
-	spf.Init(cfg)
-	dkim.Init(cfg)
+	spf.Init(cfg, spfLog)
+	dkim.Init(cfg, dkimLog)
 	scoring.Init(cfg)
 
-	go startMilterServer(log)
-	go startHTTPServer(log)
+	go startMilterServer()
+	go startHTTPServer()
 
 	log.Info("Application started",
 		zap.String("version", "1.0.0"),
@@ -96,45 +137,46 @@ func main() {
 	}
 }
 
-func startMilterServer(log *zap.Logger) {
+func startMilterServer() {
+	milt.Init(milterLog)
 	server := milter.Server{
 		NewMilter: func() milter.Milter {
-			return milt.MailProcessor(log.With(zap.String("component", "milter")))
+			return milt.MailProcessor()
 		},
 		Actions: milter.OptAddHeader | milter.OptChangeHeader | milter.OptChangeFrom,
 	}
 
 	ln, err := net.Listen("tcp", ":"+cfg.MilterPort)
 	if err != nil {
-		log.Fatal("Failed to start milter server",
+		milterLog.Fatal("Failed to start milter server",
 			zap.Error(err),
 			zap.String("port", cfg.MilterPort),
 		)
 	}
 
-	log.Info("Milter server running",
+	milterLog.Info("Milter server running",
 		zap.String("port", cfg.MilterPort),
 		zap.String("network", "tcp"),
 	)
 
 	if err := server.Serve(ln); err != nil {
-		log.Error("Milter server failure",
+		milterLog.Error("Milter server failure",
 			zap.Error(err),
 			zap.String("phase", "operation"),
 		)
 	}
 }
 
-func startHTTPServer(log *zap.Logger) {
-	r := api.NewServer(cfg, log.With(zap.String("component", "api")))
-
-	log.Info("HTTP server starting",
+func startHTTPServer() {
+	api.InitLogger(apiLog)
+	r := api.NewServer(cfg)
+	apiLog.Info("HTTP server starting",
 		zap.String("port", cfg.ApiPort),
 		zap.String("mode", cfg.Env),
 	)
 
 	if err := r.Run(":" + cfg.ApiPort); err != nil {
-		log.Error("HTTP server failed",
+		apiLog.Error("HTTP server failed",
 			zap.Error(err),
 			zap.String("phase", "startup"),
 		)

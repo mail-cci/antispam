@@ -27,6 +27,17 @@ start the application:
 The program will start the milter and HTTP servers using the ports defined
 in the configuration file.
 
+## Logging
+
+Logs are written under the directory specified by `log.path`. Each module
+creates its own file:
+
+* `main.log` - application startup and shutdown messages
+* `spf.log` - SPF validation logs
+* `dkim.log` - DKIM verification logs
+* `milter.log` - messages from the milter server
+* `api.log` - HTTP API requests
+
 ## Testing
 
 Unit tests can be executed with:

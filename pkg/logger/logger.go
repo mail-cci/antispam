@@ -18,17 +18,9 @@ type LogConfig struct {
 	ConsoleOutput bool
 }
 
-var (
-	globalLogger *zap.Logger
-	atomicLevel  zap.AtomicLevel
-)
+var atomicLevel = zap.NewAtomicLevel()
 
 func Init(config LogConfig) (*zap.Logger, error) {
-	if globalLogger != nil {
-		return globalLogger, nil
-	}
-
-	atomicLevel = zap.NewAtomicLevel()
 	if err := atomicLevel.UnmarshalText([]byte(config.Level)); err != nil {
 		return nil, err
 	}
@@ -85,25 +77,15 @@ func Init(config LogConfig) (*zap.Logger, error) {
 
 	combinedCore := zapcore.NewTee(cores...)
 
-	globalLogger = zap.New(combinedCore,
+	l := zap.New(combinedCore,
 		zap.AddCaller(),
 		zap.AddCallerSkip(1),
 		zap.AddStacktrace(zapcore.ErrorLevel),
 	)
 
-	zap.ReplaceGlobals(globalLogger)
-
-	return globalLogger, nil
-}
-
-func GetLogger() *zap.Logger {
-	return globalLogger
+	return l, nil
 }
 
 func SetLevel(level string) error {
 	return atomicLevel.UnmarshalText([]byte(level))
-}
-
-func Sync() error {
-	return globalLogger.Sync()
 }

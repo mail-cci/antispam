@@ -21,6 +21,12 @@ import (
 	"sync"
 )
 
+var moduleLogger *zap.Logger
+
+func Init(l *zap.Logger) {
+	moduleLogger = l
+}
+
 type Email struct {
 	logger      *zap.Logger
 	id          string
@@ -67,10 +73,10 @@ var emailPool = sync.Pool{
 	New: func() interface{} { return new(Email) },
 }
 
-func MailProcessor(logger *zap.Logger) *Email {
+func MailProcessor() *Email {
 	e := emailPool.Get().(*Email)
 	e.Reset()
-	e.logger = logger
+	e.logger = moduleLogger
 	e.client = make(map[string]string)
 	e.headers = make(textproto.MIMEHeader)
 	return e
@@ -78,6 +84,7 @@ func MailProcessor(logger *zap.Logger) *Email {
 
 func (e *Email) Connect(host string, family string, port uint16, addr net.IP, m *milter.Modifier) (milter.Response, error) {
 	e.id = helpers.GenerateCorrelationID()
+	e.logger = moduleLogger.With(zap.String("correlation_id", e.id))
 	e.client["host"] = host
 	e.client["family"] = family
 	e.client["port"] = fmt.Sprintf("%d", port)
@@ -227,7 +234,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			senderForSPF = "" // Para bounces, el sender efectivo es vacío
 		}
 
-		res, err := spf.Verify(e.logger, ctx, e.clientIP, spfDomain, senderForSPF)
+		res, err := spf.Verify(ctx, e.clientIP, spfDomain, senderForSPF)
 		if err != nil {
 			e.logger.Error("Error verifying SPF",
 				zap.Error(err),
@@ -295,7 +302,6 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		zap.Float64("total", total),
 		zap.String("decision", decision),
 		zap.Duration("duration", time.Since(start)),
-		zap.String("correlation_id", e.id),
 		zap.String("spf_result", spfResult),
 		zap.Bool("is_bounce", isBounceMail),
 		zap.String("spf_domain", spfDomain),
