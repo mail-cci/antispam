@@ -11,6 +11,7 @@ import (
 	"github.com/go-redis/redis/v8"
 
 	"github.com/mail-cci/antispam/internal/config"
+	"github.com/mail-cci/antispam/internal/metrics"
 	"github.com/mail-cci/antispam/internal/types"
 )
 
@@ -52,6 +53,9 @@ func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, se
 		return nil, fmt.Errorf("SPF verification not initialized")
 	}
 
+	start := time.Now()
+	metrics.SPFChecksTotal.Inc()
+
 	res := &types.SPFResult{Domain: domain}
 
 	// attempt cache lookup
@@ -61,6 +65,12 @@ func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, se
 			res.Result = val
 			res.Score = scoreFor(val)
 			logger.Debug("SPF cache hit", zap.String("key", cacheKey), zap.String("result", res.Result))
+			if strings.ToLower(val) == "pass" {
+				metrics.SPFCheckPass.Inc()
+			} else {
+				metrics.SPFCheckFail.Inc()
+			}
+			metrics.SPFCheckDurationSeconds.Observe(time.Since(start).Seconds())
 			return res, nil
 		}
 	}
@@ -71,6 +81,8 @@ func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, se
 
 	r, err := Check(logger, cctx, clientIP, domain, sender)
 	if err != nil {
+		metrics.SPFCheckFail.Inc()
+		metrics.SPFCheckDurationSeconds.Observe(time.Since(start).Seconds())
 		return nil, err
 	}
 
@@ -82,6 +94,13 @@ func Verify(logger *zap.Logger, ctx context.Context, clientIP net.IP, domain, se
 	if rdb != nil {
 		_ = rdb.Set(ctx, cacheKey, res.Result, time.Duration(r.RecordTTL)*time.Second).Err()
 	}
+
+	if strings.ToLower(res.Result) == "pass" {
+		metrics.SPFCheckPass.Inc()
+	} else {
+		metrics.SPFCheckFail.Inc()
+	}
+	metrics.SPFCheckDurationSeconds.Observe(time.Since(start).Seconds())
 
 	return res, nil
 }

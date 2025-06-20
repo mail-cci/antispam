@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/mail-cci/antispam/internal/config"
+	"github.com/mail-cci/antispam/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 )
 
@@ -73,5 +75,35 @@ func TestTTLMinimumRedirect(t *testing.T) {
 	}
 	if res.RecordTTL != 300 {
 		t.Errorf("expected TTL 300, got %d", res.RecordTTL)
+	}
+}
+
+func TestVerifyMetrics(t *testing.T) {
+	cfg := &config.Config{}
+	Init(cfg)
+
+	oldLookup := txtLookup
+	txtLookup = func(ctx context.Context, domain string) ([]string, uint32, error) {
+		return []string{"v=spf1 +all"}, 300, nil
+	}
+	defer func() { txtLookup = oldLookup }()
+
+	startTotal := testutil.ToFloat64(metrics.SPFChecksTotal)
+	startPass := testutil.ToFloat64(metrics.SPFCheckPass)
+	startFail := testutil.ToFloat64(metrics.SPFCheckFail)
+
+	_, err := Verify(zap.NewNop(), context.Background(), net.ParseIP("127.0.0.1"), "example.com", "user@example.com")
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+
+	if diff := testutil.ToFloat64(metrics.SPFChecksTotal) - startTotal; diff != 1 {
+		t.Errorf("expected SPFChecksTotal to increase by 1, got %v", diff)
+	}
+	if diff := testutil.ToFloat64(metrics.SPFCheckPass) - startPass; diff != 1 {
+		t.Errorf("expected SPFCheckPass to increase by 1, got %v", diff)
+	}
+	if diff := testutil.ToFloat64(metrics.SPFCheckFail) - startFail; diff != 0 {
+		t.Errorf("expected SPFCheckFail unchanged, got increase %v", diff)
 	}
 }
