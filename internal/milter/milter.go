@@ -258,6 +258,11 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			if err != nil {
 				return nil, err
 			}
+			headerValue := fmt.Sprintf("%s (domain of %s designates %s as permitted sender) client-ip=%s; envelope-from=%s", spfRes.Result, spfRes.Domain, e.clientIP.String(), e.clientIP.String(), e.from)
+			err = m.AddHeader("Received-SPF", headerValue)
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			err := m.AddHeader("X-SPF-Result", "")
 			if err != nil {
