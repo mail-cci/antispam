@@ -8,10 +8,9 @@ type SPFLookupResult struct {
 
 // SPFResult holds information about SPF check results.
 type SPFResult struct {
-	Result      string
-	Domain      string
-	Explanation string
-	Score       float64
+	Result string
+	Domain string
+	Score  float64
 	// RecordTTL contains the minimum TTL among all evaluated SPF records.
 	RecordTTL uint32
 }
