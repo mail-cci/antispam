@@ -210,7 +210,6 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	if e.clientIP == nil {
 		e.logger.Error("Client IP is nil", zap.String("from", e.from))
 		e.logger.Error("Client IP details", zap.String("host", e.client["host"]), zap.String("addr", e.client["addr"]))
-		return milter.RespContinue, nil
 	}
 
 	var wg sync.WaitGroup
