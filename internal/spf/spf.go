@@ -91,7 +91,6 @@ func Verify(ctx context.Context, clientIP net.IP, domain, sender string) (*types
 	}
 
 	res.Result = r.Result
-	res.Explanation = r.Explanation
 	res.Score = r.Score
 	res.RecordTTL = r.RecordTTL
 
