@@ -5,6 +5,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/mail"
+	"net/textproto"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +28,10 @@ var (
 )
 
 var txtLookup = defaultLookupTXT
+
+const (
+	dkimSigerrorEmptyS = 18
+)
 
 func defaultLookupTXT(ctx context.Context, domain string) ([]string, uint32, error) {
 	conf, err := mdns.ClientConfigFromFile("/etc/resolv.conf")
@@ -69,12 +76,53 @@ func scoreFor(valid bool) float64 {
 	return 3
 }
 
+var selectorRegexp = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+func parseSelector(header string) (string, error) {
+	for _, part := range strings.Split(header, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "s=") {
+			val := strings.TrimSpace(strings.TrimPrefix(part, "s="))
+			if val == "" {
+				return "", fmt.Errorf("empty selector")
+			}
+			if !selectorRegexp.MatchString(val) {
+				return "", fmt.Errorf("invalid selector")
+			}
+			return val, nil
+		}
+	}
+	return "", fmt.Errorf("s tag not found")
+}
+
 // Verify checks all DKIM signatures in the provided raw email. It returns a
 // DKIMResult with Valid=true if at least one signature verifies correctly.
 func Verify(rawEmail []byte) (*types.DKIMResult, error) {
 	res := &types.DKIMResult{}
 	if logger != nil {
 		logger.Debug("verifying DKIM", zap.Int("size", len(rawEmail)))
+	}
+
+	// Parse headers to extract selectors from DKIM or ARC signatures
+	if msg, err := mail.ReadMessage(bytes.NewReader(rawEmail)); err == nil {
+		process := func(values []string) {
+			for _, v := range values {
+				sel, err := parseSelector(v)
+				if err != nil {
+					if logger != nil {
+						logger.Error("invalid DKIM selector", zap.Int("code", dkimSigerrorEmptyS), zap.Error(err))
+					}
+					continue
+				}
+				if res.Selector == "" {
+					res.Selector = sel
+				}
+			}
+		}
+		dkHeader := textproto.CanonicalMIMEHeaderKey("DKIM-Signature")
+		arcHeader := textproto.CanonicalMIMEHeaderKey("ARC-Message-Signature")
+		process(msg.Header[dkHeader])
+		process(msg.Header[arcHeader])
 	}
 
 	start := time.Now()

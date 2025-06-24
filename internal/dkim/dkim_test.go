@@ -84,3 +84,73 @@ func TestVerifyCacheHitMiss(t *testing.T) {
 		t.Errorf("expected DKIMChecksTotal increase by 2, got %v", diff)
 	}
 }
+
+func TestVerifySelectorParsing(t *testing.T) {
+	cfg := &config.Config{}
+	Init(cfg, zap.NewNop())
+
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+
+	txtLookup = func(ctx context.Context, domain string) ([]string, uint32, error) {
+		if domain != "test._domainkey.example.com" {
+			return nil, 0, fmt.Errorf("unexpected domain %s", domain)
+		}
+		return []string{fmt.Sprintf("v=DKIM1; p=%s", pubB64)}, 60, nil
+	}
+	defer func() { txtLookup = defaultLookupTXT }()
+
+	raw := []byte("From: sender@example.com\r\n\r\nbody")
+	var signed bytes.Buffer
+	if err := godkim.Sign(&signed, bytes.NewReader(raw), &godkim.SignOptions{
+		Domain:     "example.com",
+		Selector:   "test",
+		Signer:     priv,
+		HeaderKeys: []string{"From"},
+	}); err != nil {
+		t.Fatalf("sign failed: %v", err)
+	}
+
+	res, err := Verify(signed.Bytes())
+	if err != nil {
+		t.Fatalf("verify error: %v", err)
+	}
+	if res.Selector != "test" {
+		t.Errorf("expected selector 'test', got %s", res.Selector)
+	}
+}
+
+func TestVerifyInvalidSelector(t *testing.T) {
+	cfg := &config.Config{}
+	Init(cfg, zap.NewNop())
+
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+
+	txtLookup = func(ctx context.Context, domain string) ([]string, uint32, error) {
+		if domain != "bad*sel._domainkey.example.com" {
+			return nil, 0, fmt.Errorf("unexpected domain %s", domain)
+		}
+		return []string{fmt.Sprintf("v=DKIM1; p=%s", pubB64)}, 60, nil
+	}
+	defer func() { txtLookup = defaultLookupTXT }()
+
+	raw := []byte("From: sender@example.com\r\n\r\nbody")
+	var signed bytes.Buffer
+	if err := godkim.Sign(&signed, bytes.NewReader(raw), &godkim.SignOptions{
+		Domain:     "example.com",
+		Selector:   "bad*sel",
+		Signer:     priv,
+		HeaderKeys: []string{"From"},
+	}); err != nil {
+		t.Fatalf("sign failed: %v", err)
+	}
+
+	res, err := Verify(signed.Bytes())
+	if err != nil {
+		t.Fatalf("verify error: %v", err)
+	}
+	if res.Selector != "" {
+		t.Errorf("expected empty selector due to validation failure, got %s", res.Selector)
+	}
+}
