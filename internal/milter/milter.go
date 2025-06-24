@@ -131,6 +131,26 @@ func (e *Email) BodyChunk(chunk []byte, m *milter.Modifier) (milter.Response, er
 func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	start := time.Now()
 
+	// Si la IP o el nombre del cliente no fueron provistos durante el
+	// evento Connect, intentar recuperarlos de las macros enviadas por el
+	// MTA. Algunos MTAs solo envíen estos datos mediante macros y no en
+	// el comando inicial de conexión.
+	if m != nil {
+		if e.clientIP == nil {
+			if ipStr := m.Macros["client_addr"]; ipStr != "" {
+				if ip := net.ParseIP(ipStr); ip != nil {
+					e.clientIP = ip
+					e.client["addr"] = ipStr
+				}
+			}
+		}
+		if e.client["host"] == "" {
+			if host := m.Macros["client_name"]; host != "" {
+				e.client["host"] = host
+			}
+		}
+	}
+
 	e.rawEmail.Reset()
 	for k, vv := range e.headers {
 		for _, v := range vv {
