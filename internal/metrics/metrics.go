@@ -57,6 +57,27 @@ var (
 		Help:    "Duration of SPF verification in seconds",
 		Buckets: prometheus.DefBuckets,
 	})
+
+	DKIMChecksTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dkim_checks_total",
+		Help: "Total number of DKIM verifications",
+	})
+
+	DKIMCheckPass = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dkim_check_pass_total",
+		Help: "Number of DKIM verifications that passed",
+	})
+
+	DKIMCheckFail = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dkim_check_fail_total",
+		Help: "Number of DKIM verifications that failed",
+	})
+
+	DKIMCheckDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "dkim_check_duration_seconds",
+		Help:    "Duration of DKIM verification in seconds",
+		Buckets: prometheus.DefBuckets,
+	})
 )
 
 func Init() {

@@ -34,6 +34,7 @@ auth:
   dkim:
     enabled: true
     timeout: 5s
+    cache_ttl: 1h
 
 scoring:
   reject_threshold: 10.0

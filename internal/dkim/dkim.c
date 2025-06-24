@@ -1,3 +1,4 @@
+//go:build ignore
 /*
  * Copyright 2025 Vsevolod Stakhov
  *

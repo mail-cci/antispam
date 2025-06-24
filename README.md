@@ -27,6 +27,9 @@ start the application:
 The program will start the milter and HTTP servers using the ports defined
 in the configuration file.
 
+DKIM public keys retrieved during verification are cached in Redis. The TTL for
+these entries can be configured via `auth.dkim.cache_ttl` in `config.yaml`.
+
 ## Logging
 
 Logs are written under the directory specified by `log.path`. Each module

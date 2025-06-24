@@ -11,6 +11,7 @@ import (
 
 	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-milter"
+	"github.com/mail-cci/antispam/internal/dkim"
 	"github.com/mail-cci/antispam/internal/scoring"
 	"github.com/mail-cci/antispam/internal/spf"
 	"github.com/mail-cci/antispam/internal/types"
@@ -243,6 +244,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	wg.Add(1)
 
 	var spfRes *types.SPFResult
+	var dkimRes *types.DKIMResult
 
 	go func() {
 		defer wg.Done()
@@ -267,9 +269,18 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 
 	wg.Wait()
 
+	// verify DKIM signatures using the full raw message
+	dkimRes, err = dkim.Verify(e.rawEmail.Bytes())
+	if err != nil {
+		e.logger.Error("Error verifying DKIM", zap.Error(err))
+	}
+
 	var total float64
 	if spfRes != nil {
 		total += spfRes.Score
+	}
+	if dkimRes != nil {
+		total += dkimRes.Score
 	}
 
 	decision := scoring.Decide(total)
@@ -318,6 +329,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		zap.Strings("recipients", e.recipients),
 		zap.String("ip", e.clientIP.String()),
 		zap.Any("spf", spfRes),
+		zap.Any("dkim", dkimRes),
 		zap.Float64("total", total),
 		zap.String("decision", decision),
 		zap.Duration("duration", time.Since(start)),
