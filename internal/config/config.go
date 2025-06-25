@@ -14,8 +14,9 @@ type SPFConfig struct {
 }
 
 type DKIMConfig struct {
-	Enabled bool
-	Timeout time.Duration
+	Enabled  bool
+	Timeout  time.Duration
+	CacheTTL time.Duration
 }
 
 type ScoringConfig struct {
@@ -77,8 +78,9 @@ func LoadConfig() (*Config, error) {
 				CacheTTL: viper.GetDuration("auth.spf.cache_ttl"),
 			},
 			DKIM: DKIMConfig{
-				Enabled: viper.GetBool("auth.dkim.enabled"),
-				Timeout: viper.GetDuration("auth.dkim.timeout"),
+				Enabled:  viper.GetBool("auth.dkim.enabled"),
+				Timeout:  viper.GetDuration("auth.dkim.timeout"),
+				CacheTTL: viper.GetDuration("auth.dkim.cache_ttl"),
 			},
 		},
 		Scoring: ScoringConfig{
