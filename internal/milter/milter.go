@@ -241,11 +241,12 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2) // Both SPF and DKIM
 
 	var spfRes *types.SPFResult
 	var dkimRes *types.DKIMResult
 
+	// Start SPF check in goroutine
 	go func() {
 		defer wg.Done()
 
@@ -267,12 +268,43 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		spfRes = res
 	}()
 
-	wg.Wait()
+	// Start DKIM check in goroutine
+	go func() {
+		defer wg.Done()
+		
+		res, err := dkim.VerifyWithCorrelationID(e.rawEmail.Bytes(), e.id)
+		if err != nil {
+			e.logger.Error("Error verifying DKIM", zap.Error(err))
+			return
+		}
+		dkimRes = res
+	}()
 
-	// verify DKIM signatures using the full raw message
-	dkimRes, err = dkim.VerifyWithCorrelationID(e.rawEmail.Bytes(), e.id)
-	if err != nil {
-		e.logger.Error("Error verifying DKIM", zap.Error(err))
+	// Wait for both checks with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	// Apply timeout for both SPF and DKIM checks
+	timeout := 15 * time.Second
+	select {
+	case <-done:
+		// Both checks completed
+	case <-time.After(timeout):
+		e.logger.Warn("Authentication checks timed out",
+			zap.Duration("timeout", timeout),
+			zap.Bool("spf_completed", spfRes != nil),
+			zap.Bool("dkim_completed", dkimRes != nil))
+		
+		// Provide default results for incomplete checks
+		if spfRes == nil {
+			spfRes = &types.SPFResult{Result: "timeout", Score: 2}
+		}
+		if dkimRes == nil {
+			dkimRes = &types.DKIMResult{Valid: false, Score: 3}
+		}
 	}
 
 	var total float64

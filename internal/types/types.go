@@ -21,6 +21,7 @@ type DKIMResult struct {
 	Domain   string
 	Selector string
 	Score    float64
+	WeakHash bool // Indicates if signature uses weak hash (SHA-1)
 }
 
 // AuthResult aggregates SPF and DKIM results.

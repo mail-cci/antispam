@@ -137,6 +137,11 @@ func scoreFor(valid bool) float64 {
 	return 3
 }
 
+// scoreForWeakHash returns appropriate score for weak hash algorithms
+func scoreForWeakHash() float64 {
+	return 5 // Higher spam score for SHA-1 usage
+}
+
 var selectorRegexp = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 // truncateString truncates a string to maxLen characters for logging
@@ -385,19 +390,37 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 					zap.String("step", "valid_signature"),
 					zap.String("domain", v.Domain))
 			}
-		} else if logger != nil {
-			logger.Debug("DKIM signature validation failed",
-				zap.String("step", "signature_failed"),
-				zap.String("domain", v.Domain),
-				zap.Int("error_code", errorCodeFromError(v.Err)),
-				zap.Error(v.Err))
+		} else {
+			// Check if error is specifically about weak hash algorithm (SHA-1)
+			if strings.Contains(v.Err.Error(), "hash algorithm too weak") {
+				res.WeakHash = true
+				if logger != nil {
+					logger.Debug("DKIM signature uses weak hash algorithm",
+						zap.String("step", "weak_hash_detected"),
+						zap.String("domain", v.Domain),
+						zap.Int("error_code", errorCodeFromError(v.Err)),
+						zap.Error(v.Err))
+				}
+			} else if logger != nil {
+				logger.Debug("DKIM signature validation failed",
+					zap.String("step", "signature_failed"),
+					zap.String("domain", v.Domain),
+					zap.Int("error_code", errorCodeFromError(v.Err)),
+					zap.Error(v.Err))
+			}
 		}
 	}
 
-	res.Score = scoreFor(res.Valid)
+	// Determine score based on validation result and weak hash detection
 	if res.Valid {
+		res.Score = scoreFor(res.Valid)
 		metrics.DKIMCheckPass.Inc()
+	} else if res.WeakHash {
+		// SHA-1 signatures get higher spam score but don't fail completely
+		res.Score = scoreForWeakHash()
+		metrics.DKIMCheckFail.Inc()
 	} else {
+		res.Score = scoreFor(res.Valid)
 		metrics.DKIMCheckFail.Inc()
 	}
 	metrics.DKIMCheckDurationSeconds.Observe(time.Since(start).Seconds())
