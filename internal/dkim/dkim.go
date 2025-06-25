@@ -78,6 +78,22 @@ func scoreFor(valid bool) float64 {
 
 var selectorRegexp = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
+// truncateString truncates a string to maxLen characters for logging
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// addCorrelationID adds correlation ID to log fields if provided
+func addCorrelationID(fields []zap.Field, correlationID string) []zap.Field {
+	if correlationID != "" {
+		return append(fields, zap.String("correlation_id", correlationID))
+	}
+	return fields
+}
+
 func parseSelector(header string) (string, error) {
 	for _, part := range strings.Split(header, ";") {
 		part = strings.TrimSpace(part)
@@ -98,35 +114,110 @@ func parseSelector(header string) (string, error) {
 // Verify checks all DKIM signatures in the provided raw email. It returns a
 // DKIMResult with Valid=true if at least one signature verifies correctly.
 func Verify(rawEmail []byte) (*types.DKIMResult, error) {
+	return VerifyWithCorrelationID(rawEmail, "")
+}
+
+// VerifyWithCorrelationID checks all DKIM signatures in the provided raw email with correlation ID for debugging.
+func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIMResult, error) {
 	res := &types.DKIMResult{}
+	
+	// Create logger with correlation ID if provided
+	logFields := []zap.Field{
+		zap.Int("email_size", len(rawEmail)),
+		zap.String("step", "init"),
+	}
+	if correlationID != "" {
+		logFields = append(logFields, zap.String("correlation_id", correlationID))
+	}
+	
 	if logger != nil {
-		logger.Debug("verifying DKIM", zap.Int("size", len(rawEmail)))
+		logger.Debug("starting DKIM verification", logFields...)
 	}
 
 	// Parse headers to extract selectors from DKIM or ARC signatures
 	if msg, err := mail.ReadMessage(bytes.NewReader(rawEmail)); err == nil {
-		process := func(values []string) {
-			for _, v := range values {
+		if logger != nil {
+			logger.Debug("email parsed successfully", addCorrelationID([]zap.Field{
+				zap.String("step", "parse_headers"),
+			}, correlationID)...)
+		}
+		
+		process := func(headerType string, values []string) {
+			if logger != nil {
+				logger.Debug("processing headers", addCorrelationID([]zap.Field{
+					zap.String("step", "process_headers"),
+					zap.String("header_type", headerType),
+					zap.Int("header_count", len(values)),
+				}, correlationID)...)
+			}
+			
+			for i, v := range values {
+				if logger != nil {
+					logger.Debug("processing signature header", addCorrelationID([]zap.Field{
+						zap.String("step", "parse_signature"),
+						zap.String("header_type", headerType),
+						zap.Int("signature_index", i),
+						zap.String("signature_preview", truncateString(v, 100)),
+					}, correlationID)...)
+				}
+				
 				sel, err := parseSelector(v)
 				if err != nil {
 					if logger != nil {
-						logger.Error("invalid DKIM selector", zap.Int("code", dkimSigerrorEmptyS), zap.Error(err))
+						logger.Debug("selector parsing failed", addCorrelationID([]zap.Field{
+							zap.String("step", "parse_selector"),
+							zap.Int("code", dkimSigerrorEmptyS), 
+							zap.Error(err),
+							zap.String("signature_preview", truncateString(v, 100)),
+						}, correlationID)...)
 					}
 					continue
 				}
+				
+				if logger != nil {
+					logger.Debug("selector extracted successfully", addCorrelationID([]zap.Field{
+						zap.String("step", "extract_selector"),
+						zap.String("selector", sel),
+					}, correlationID)...)
+				}
+				
 				if res.Selector == "" {
 					res.Selector = sel
 				}
 			}
 		}
+		
 		dkHeader := textproto.CanonicalMIMEHeaderKey("DKIM-Signature")
 		arcHeader := textproto.CanonicalMIMEHeaderKey("ARC-Message-Signature")
-		process(msg.Header[dkHeader])
-		process(msg.Header[arcHeader])
+		
+		dkimHeaders := msg.Header[dkHeader]
+		arcHeaders := msg.Header[arcHeader]
+		
+		if logger != nil {
+			logger.Debug("found signature headers", addCorrelationID([]zap.Field{
+				zap.String("step", "count_headers"),
+				zap.Int("dkim_signatures", len(dkimHeaders)),
+				zap.Int("arc_signatures", len(arcHeaders)),
+			}, correlationID)...)
+		}
+		
+		process("DKIM-Signature", dkimHeaders)
+		process("ARC-Message-Signature", arcHeaders)
+	} else {
+		if logger != nil {
+			logger.Debug("failed to parse email headers", 
+				zap.String("step", "parse_headers"),
+				zap.Error(err))
+		}
 	}
 
 	start := time.Now()
 	metrics.DKIMChecksTotal.Inc()
+
+	if logger != nil {
+		logger.Debug("setup verification context", 
+			zap.String("step", "setup_context"))
+	}
 
 	// Setup a context with timeout for DNS lookups if configured.
 	ctx := context.Background()
@@ -134,22 +225,73 @@ func Verify(rawEmail []byte) (*types.DKIMResult, error) {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, cfg.Auth.DKIM.Timeout)
 		defer cancel()
+		
+		if logger != nil {
+			logger.Debug("context timeout configured", 
+				zap.String("step", "configure_timeout"),
+				zap.Duration("timeout", cfg.Auth.DKIM.Timeout))
+		}
 	}
 
 	lookup := func(domain string) ([]string, error) {
-		return lookupTXTWithCache(ctx, domain)
+		if logger != nil {
+			logger.Debug("DNS lookup requested", 
+				zap.String("step", "dns_lookup"),
+				zap.String("domain", domain))
+		}
+		
+		result, err := lookupTXTWithCache(ctx, domain)
+		
+		if logger != nil {
+			logger.Debug("DNS lookup completed", 
+				zap.String("step", "dns_lookup_complete"),
+				zap.String("domain", domain),
+				zap.Error(err),
+				zap.Int("records_count", len(result)))
+				
+			if len(result) > 0 {
+				logger.Debug("DNS TXT records found", 
+					zap.String("step", "dns_records"),
+					zap.String("domain", domain),
+					zap.String("first_record_preview", truncateString(result[0], 200)))
+			}
+		}
+		
+		return result, err
+	}
+
+	if logger != nil {
+		logger.Debug("starting DKIM verification with library", 
+			zap.String("step", "verify_with_library"))
 	}
 
 	verifs, err := dkim.VerifyWithOptions(bytes.NewReader(rawEmail), &dkim.VerifyOptions{
 		LookupTXT: lookup,
 	})
+	
+	if logger != nil {
+		logger.Debug("DKIM library verification completed", 
+			zap.String("step", "library_verification_complete"),
+			zap.Error(err),
+			zap.Int("verifications_count", len(verifs)))
+	}
+	
 	if err != nil && len(verifs) == 0 {
+		if logger != nil {
+			logger.Debug("DKIM verification failed with no results", 
+				zap.String("step", "verification_failed"),
+				zap.Error(err))
+		}
 		metrics.DKIMCheckFail.Inc()
 		metrics.DKIMCheckDurationSeconds.Observe(time.Since(start).Seconds())
 		return nil, err
 	}
 
 	if len(verifs) == 0 {
+		if logger != nil {
+			logger.Debug("no DKIM signatures found", 
+				zap.String("step", "no_signatures"))
+		}
 		res.Valid = false
 		res.Score = 0
 		metrics.DKIMCheckFail.Inc()
@@ -157,12 +299,36 @@ func Verify(rawEmail []byte) (*types.DKIMResult, error) {
 		return res, nil
 	}
 
-	for _, v := range verifs {
+	if logger != nil {
+		logger.Debug("processing verification results", 
+			zap.String("step", "process_results"),
+			zap.Int("results_count", len(verifs)))
+	}
+
+	for i, v := range verifs {
+		if logger != nil {
+			logger.Debug("processing verification result", 
+				zap.String("step", "process_result"),
+				zap.Int("result_index", i),
+				zap.String("domain", v.Domain),
+				zap.Error(v.Err))
+		}
+		
 		if res.Domain == "" {
 			res.Domain = v.Domain
 		}
 		if v.Err == nil {
 			res.Valid = true
+			if logger != nil {
+				logger.Debug("valid DKIM signature found", 
+					zap.String("step", "valid_signature"),
+					zap.String("domain", v.Domain))
+			}
+		} else if logger != nil {
+			logger.Debug("DKIM signature validation failed", 
+				zap.String("step", "signature_failed"),
+				zap.String("domain", v.Domain),
+				zap.Error(v.Err))
 		}
 	}
 
@@ -184,26 +350,78 @@ func Verify(rawEmail []byte) (*types.DKIMResult, error) {
 }
 
 func lookupTXTWithCache(ctx context.Context, domain string) ([]string, error) {
+	if logger != nil {
+		logger.Debug("DNS TXT lookup with cache", 
+			zap.String("step", "cache_lookup_start"),
+			zap.String("domain", domain))
+	}
+	
 	selector := ""
 	d := ""
 	if parts := strings.SplitN(domain, "._domainkey.", 2); len(parts) == 2 {
 		selector = parts[0]
 		d = parts[1]
+		
+		if logger != nil {
+			logger.Debug("parsed DKIM domain", 
+				zap.String("step", "parse_dkim_domain"),
+				zap.String("selector", selector),
+				zap.String("domain", d))
+		}
 	}
 
 	cacheKey := ""
 	if selector != "" && d != "" {
 		cacheKey = fmt.Sprintf("dkim:key:%s:%s", selector, d)
+		
+		if logger != nil {
+			logger.Debug("checking cache for DKIM key", 
+				zap.String("step", "cache_check"),
+				zap.String("cache_key", cacheKey),
+				zap.Bool("redis_available", rdb != nil))
+		}
+		
 		if rdb != nil {
 			if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+				if logger != nil {
+					logger.Debug("DKIM key found in cache", 
+						zap.String("step", "cache_hit"),
+						zap.String("cache_key", cacheKey),
+						zap.String("value_preview", truncateString(val, 100)))
+				}
 				return []string{val}, nil
+			} else if logger != nil {
+				logger.Debug("DKIM key not found in cache", 
+					zap.String("step", "cache_miss"),
+					zap.String("cache_key", cacheKey),
+					zap.String("cache_error", err.Error()))
 			}
 		}
 	}
 
+	if logger != nil {
+		logger.Debug("performing DNS TXT lookup", 
+			zap.String("step", "dns_txt_lookup"),
+			zap.String("domain", domain))
+	}
+
 	txts, ttl, err := txtLookup(ctx, domain)
 	if err != nil {
+		if logger != nil {
+			logger.Debug("DNS TXT lookup failed", 
+				zap.String("step", "dns_lookup_failed"),
+				zap.String("domain", domain),
+				zap.Error(err))
+		}
 		return nil, err
+	}
+
+	if logger != nil {
+		logger.Debug("DNS TXT lookup successful", 
+			zap.String("step", "dns_lookup_success"),
+			zap.String("domain", domain),
+			zap.Uint32("ttl", ttl),
+			zap.Int("records_count", len(txts)))
 	}
 
 	if cacheKey != "" && rdb != nil && len(txts) > 0 {
@@ -214,7 +432,21 @@ func lookupTXTWithCache(ctx context.Context, domain string) ([]string, error) {
 		if dur == 0 {
 			dur = time.Hour
 		}
-		_ = rdb.Set(ctx, cacheKey, txts[0], dur).Err()
+		
+		if logger != nil {
+			logger.Debug("caching DKIM key", 
+				zap.String("step", "cache_store"),
+				zap.String("cache_key", cacheKey),
+				zap.Duration("cache_duration", dur),
+				zap.String("value_preview", truncateString(txts[0], 100)))
+		}
+		
+		if err := rdb.Set(ctx, cacheKey, txts[0], dur).Err(); err != nil && logger != nil {
+			logger.Debug("failed to cache DKIM key", 
+				zap.String("step", "cache_store_failed"),
+				zap.String("cache_key", cacheKey),
+				zap.Error(err))
+		}
 	}
 	return txts, nil
 }

@@ -270,7 +270,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	wg.Wait()
 
 	// verify DKIM signatures using the full raw message
-	dkimRes, err = dkim.Verify(e.rawEmail.Bytes())
+	dkimRes, err = dkim.VerifyWithCorrelationID(e.rawEmail.Bytes(), e.id)
 	if err != nil {
 		e.logger.Error("Error verifying DKIM", zap.Error(err))
 	}
