@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
+	"net/mail"
 	"testing"
 	"time"
 
@@ -146,11 +147,20 @@ func TestVerifyInvalidSelector(t *testing.T) {
 		t.Fatalf("sign failed: %v", err)
 	}
 
-	res, err := Verify(signed.Bytes())
+	msg, err := mail.ReadMessage(bytes.NewReader(signed.Bytes()))
 	if err != nil {
-		t.Fatalf("verify error: %v", err)
+		t.Fatalf("failed to parse signed message: %v", err)
 	}
-	if res.Selector != "" {
-		t.Errorf("expected empty selector due to validation failure, got %s", res.Selector)
+	header := msg.Header.Get("DKIM-Signature")
+	if header == "" {
+		t.Fatal("missing DKIM-Signature header")
+	}
+	_, err = parseSelector(header)
+	if err == nil {
+		t.Fatal("expected selector parsing error")
+	}
+	code := errorCodeFromError(err)
+	if code != DKIM_SIGERROR_EMPTY_S {
+		t.Errorf("expected error code %d, got %d", DKIM_SIGERROR_EMPTY_S, code)
 	}
 }
