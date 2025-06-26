@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 	"net"
 	"net/textproto"
+	"strings"
 	"sync"
 )
 
@@ -202,6 +203,16 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 
 	ctx := context.Background()
 
+	// Extract From header domain for DMARC preparation
+	var fromHeaderDomain string
+	fromHeader := e.headers.Get("From")
+	if fromHeader != "" {
+		fromHeaderDomain = extractFromHeaderDomain(fromHeader)
+		e.logger.Debug("Extracted From header domain",
+			zap.String("from_header", fromHeader),
+			zap.String("from_domain", fromHeaderDomain))
+	}
+
 	// Manejo especial para bounces (from vacío o <>)
 	var spfDomain string
 	var isBounceMail bool
@@ -322,6 +333,8 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		if err != nil {
 			return nil, err
 		}
+		
+		// Add SPF headers
 		if spfRes != nil {
 			err := m.AddHeader("X-SPF-Result", spfRes.Result)
 			if err != nil {
@@ -338,6 +351,64 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				return nil, err
 			}
 		}
+		
+		// Add enhanced DKIM headers
+		if dkimRes != nil {
+			// Main DKIM result header
+			dkimStatus := "fail"
+			if dkimRes.Valid {
+				dkimStatus = "pass"
+			}
+			err := m.AddHeader("X-DKIM-Result", dkimStatus)
+			if err != nil {
+				return nil, err
+			}
+			
+			// Enhanced DKIM information headers
+			err = m.AddHeader("X-DKIM-Signatures", fmt.Sprintf("%d", dkimRes.TotalSignatures))
+			if err != nil {
+				return nil, err
+			}
+			
+			err = m.AddHeader("X-DKIM-Valid", fmt.Sprintf("%d", dkimRes.ValidSignatures))
+			if err != nil {
+				return nil, err
+			}
+			
+			if dkimRes.Domain != "" {
+				err = m.AddHeader("X-DKIM-Domain", dkimRes.Domain)
+				if err != nil {
+					return nil, err
+				}
+			}
+			
+			// Add edge case information if present
+			if dkimRes.EdgeCaseInfo != nil && len(dkimRes.EdgeCaseInfo.Anomalies) > 0 {
+				err = m.AddHeader("X-DKIM-Anomalies", fmt.Sprintf("%v", dkimRes.EdgeCaseInfo.Anomalies))
+				if err != nil {
+					return nil, err
+				}
+				
+				err = m.AddHeader("X-DKIM-Threat-Level", string(dkimRes.EdgeCaseInfo.ThreatLevel))
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			err := m.AddHeader("X-DKIM-Result", "none")
+			if err != nil {
+				return nil, err
+			}
+		}
+		
+		// Add From domain header for DMARC preparation
+		if fromHeaderDomain != "" {
+			err := m.AddHeader("X-From-Domain", fromHeaderDomain)
+			if err != nil {
+				return nil, err
+			}
+		}
+		
 		err = m.AddHeader("X-Spam-Status", decision)
 		if err != nil {
 			return nil, err
@@ -358,6 +429,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	e.logger.Info("[cci-spam-inbound-prefilter] - Processed email",
 		zap.String("message_id", e.headers.Get("Message-ID")),
 		zap.String("from", e.from),
+		zap.String("from_header_domain", fromHeaderDomain),
 		zap.Strings("recipients", e.recipients),
 		zap.String("ip", e.clientIP.String()),
 		zap.Any("spf", spfRes),
@@ -385,4 +457,48 @@ func (e *Email) Close() error {
 	e.Reset()
 	emailPool.Put(e)
 	return nil
+}
+
+// extractFromHeaderDomain extracts the domain from a From header field
+func extractFromHeaderDomain(fromHeader string) string {
+	if fromHeader == "" {
+		return ""
+	}
+
+	// Handle cases with display names and angle brackets
+	// Examples:
+	// "John Doe <john@example.com>" -> "example.com"
+	// "john@example.com" -> "example.com"
+	// "<john@example.com>" -> "example.com"
+	
+	// Remove display name and quotes
+	fromHeader = strings.TrimSpace(fromHeader)
+	
+	// Extract email from angle brackets if present
+	if strings.Contains(fromHeader, "<") && strings.Contains(fromHeader, ">") {
+		start := strings.Index(fromHeader, "<")
+		end := strings.Index(fromHeader, ">")
+		if start < end && start >= 0 && end > start {
+			fromHeader = fromHeader[start+1 : end]
+		}
+	}
+	
+	// Remove any remaining quotes
+	fromHeader = strings.Trim(fromHeader, "\"'")
+	fromHeader = strings.TrimSpace(fromHeader)
+	
+	// Find the @ symbol
+	atIndex := strings.LastIndex(fromHeader, "@")
+	if atIndex == -1 || atIndex == len(fromHeader)-1 {
+		return ""
+	}
+	
+	// Extract domain part
+	domain := fromHeader[atIndex+1:]
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	
+	// Remove any trailing characters that shouldn't be in a domain
+	domain = strings.Trim(domain, " \t\r\n>)")
+	
+	return domain
 }
