@@ -376,6 +376,37 @@ type PerformanceMonitor struct {
 	parallelJobs      int64
 }
 
+// GetStats returns a copy of the performance metrics.
+func (p *PerformanceMonitor) GetStats() types.DKIMPerformanceInfo {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	totalCache := p.cacheHits + p.cacheMisses
+	var hitRate float64
+	if totalCache > 0 {
+		hitRate = float64(p.cacheHits) / float64(totalCache)
+	}
+
+	return types.DKIMPerformanceInfo{
+		ProcessingTime:   p.totalTime,
+		DNSLookupTime:    p.dnsTime,
+		CacheHitRate:     hitRate,
+		ParallelWorkers:  int(p.parallelJobs),
+		EarlyTermination: p.earlyTerminations > 0,
+	}
+}
+
+// GetStats returns a copy of the local cache statistics.
+func (l *LocalCache) GetStats() CacheStats {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	stats := l.stats
+	stats.TotalSize = l.curSize
+	stats.EntryCount = int64(len(l.entries))
+	return stats
+}
+
 func defaultLookupTXT(ctx context.Context, domain string) ([]string, uint32, error) {
 	conf, err := mdns.ClientConfigFromFile("/etc/resolv.conf")
 	if err != nil || len(conf.Servers) == 0 {
@@ -1180,18 +1211,18 @@ func CheckDMARCAlignment(fromDomain string, dkimResult *types.DKIMResult, alignm
 	case types.AlignmentStrict:
 		// Strict alignment: domains must match exactly
 		return strings.EqualFold(signingDomain, fromDomain)
-	
+
 	case types.AlignmentRelaxed:
 		// Relaxed alignment: organizational domains must match
 		fromOrgDomain := GetOrganizationalDomainDetailed(fromDomain)
 		sigOrgDomain := GetOrganizationalDomainDetailed(signingDomain)
-		
+
 		if fromOrgDomain == nil || sigOrgDomain == nil {
 			return false
 		}
-		
+
 		return strings.EqualFold(fromOrgDomain.OrgDomain, sigOrgDomain.OrgDomain)
-	
+
 	default:
 		// Default to relaxed alignment
 		return CheckDMARCAlignment(fromDomain, dkimResult, types.AlignmentRelaxed)
