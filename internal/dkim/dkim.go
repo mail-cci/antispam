@@ -1353,10 +1353,14 @@ func analyzeHashAlgorithms(signatures []types.DKIMSignatureResult, info *types.D
 		}
 	}
 
-	// Check for mixed hash algorithms
-	if len(hashAlgorithms) > 1 {
-		info.Anomalies = append(info.Anomalies, types.AnomalyMixedHashAlgorithms)
-	}
+// Check for mixed hash algorithms
+if len(hashAlgorithms) > 1 {
+info.Anomalies = append(info.Anomalies, types.AnomalyMixedHashAlgorithms)
+}
+
+if weakHashCount > 0 {
+info.Anomalies = append(info.Anomalies, types.AnomalyWeakHashAlgorithm)
+}
 }
 
 // analyzeSignatureTiming checks for timing-related anomalies

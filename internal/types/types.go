@@ -49,6 +49,8 @@ const (
 	AnomalyNone                    DKIMAnomalyFlag = ""
 	AnomalyMultipleValidDomains    DKIMAnomalyFlag = "multiple_valid_domains"
 	AnomalyMixedHashAlgorithms     DKIMAnomalyFlag = "mixed_hash_algorithms"
+	// AnomalyWeakHashAlgorithm is triggered when signatures use weak hash algorithms like SHA-1
+	AnomalyWeakHashAlgorithm       DKIMAnomalyFlag = "weak_hash_algorithm"
 	AnomalyExpiredSignatures       DKIMAnomalyFlag = "expired_signatures"
 	AnomalyFutureSignatures        DKIMAnomalyFlag = "future_signatures"
 	AnomalyTooManySignatures       DKIMAnomalyFlag = "too_many_signatures"
