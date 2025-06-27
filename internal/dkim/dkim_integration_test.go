@@ -179,7 +179,7 @@ Subject: DMARC Alignment Test
 
 Testing DMARC alignment scenarios.`)
 
-	result, err := VerifyForDMARC(testEmail, "example.com")
+       result, err := VerifyForDMARC(testEmail, "example.com", "")
 	if err != nil && result == nil {
 		t.Fatalf("DMARC verification failed: %v", err)
 	}

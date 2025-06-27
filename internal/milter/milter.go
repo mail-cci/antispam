@@ -285,7 +285,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	go func() {
 		defer wg.Done()
 		
-		res, err := dkim.VerifyWithCorrelationID(e.rawEmail.Bytes(), e.id)
+               res, err := dkim.VerifyForDMARC(e.rawEmail.Bytes(), fromHeaderDomain, e.id)
 		if err != nil {
 			e.logger.Error("Error verifying DKIM", zap.Error(err))
 			return
