@@ -1122,8 +1122,8 @@ func calculatePartialCreditScore(result *types.DKIMResult) float64 {
 }
 
 // VerifyForDMARC performs DKIM verification specifically for DMARC alignment checking
-func VerifyForDMARC(rawEmail []byte, fromDomain string) (*types.DKIMResult, error) {
-	result, err := VerifyWithCorrelationID(rawEmail, "")
+func VerifyForDMARC(rawEmail []byte, fromDomain, correlationID string) (*types.DKIMResult, error) {
+       result, err := VerifyWithCorrelationID(rawEmail, correlationID)
 	if err != nil {
 		return nil, err
 	}
