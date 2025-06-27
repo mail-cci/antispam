@@ -12,6 +12,7 @@ import (
 	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-milter"
 	"github.com/mail-cci/antispam/internal/dkim"
+	"github.com/mail-cci/antispam/internal/dmarc"
 	"github.com/mail-cci/antispam/internal/scoring"
 	"github.com/mail-cci/antispam/internal/spf"
 	"github.com/mail-cci/antispam/internal/types"
@@ -252,10 +253,11 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2) // Both SPF and DKIM
+	wg.Add(2) // SPF and DKIM (DMARC will run after these complete)
 
 	var spfRes *types.SPFResult
 	var dkimRes *types.DKIMResult
+	var dmarcRes *types.DMARCResult
 
 	// Start SPF check in goroutine
 	go func() {
@@ -318,12 +320,53 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		}
 	}
 
+	// DMARC verification (runs after SPF and DKIM complete)
+	if fromHeaderDomain != "" && !isBounceMail {
+		// Create DMARC verifier
+		dmarcVerifier := dmarc.NewVerifier(e.logger, nil, &dmarc.Config{
+			Enabled:  true,
+			Timeout:  5 * time.Second,
+			CacheTTL: 4 * time.Hour,
+		})
+		
+		// Perform DMARC verification
+		dmarcCtx, dmarcCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer dmarcCancel()
+		
+		dmarcResult, err := dmarcVerifier.Verify(dmarcCtx, fromHeaderDomain, spfRes, dkimRes)
+		if err != nil {
+			e.logger.Error("Error verifying DMARC",
+				zap.Error(err),
+				zap.String("from_domain", fromHeaderDomain))
+			// Continue with default DMARC result
+			dmarcRes = &types.DMARCResult{
+				Valid:       false,
+				Disposition: "none",
+				Score:       0.5,
+				Error:       err.Error(),
+			}
+		} else {
+			dmarcRes = dmarcResult
+		}
+	} else {
+		// No DMARC for bounces or emails without From domain
+		dmarcRes = &types.DMARCResult{
+			Valid:       false,
+			Disposition: "none",
+			Score:       0.0,
+			Error:       "no from domain or bounce email",
+		}
+	}
+
 	var total float64
 	if spfRes != nil {
 		total += spfRes.Score
 	}
 	if dkimRes != nil {
 		total += dkimRes.Score
+	}
+	if dmarcRes != nil {
+		total += dmarcRes.Score
 	}
 
 	decision := scoring.Decide(total)
@@ -401,6 +444,42 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			}
 		}
 		
+		// Add DMARC headers
+		if dmarcRes != nil {
+			dmarcStatus := "fail"
+			if dmarcRes.Valid {
+				dmarcStatus = "pass"
+			}
+			err := m.AddHeader("X-DMARC-Result", dmarcStatus)
+			if err != nil {
+				return nil, err
+			}
+			
+			err = m.AddHeader("X-DMARC-Disposition", dmarcRes.Disposition)
+			if err != nil {
+				return nil, err
+			}
+			
+			if dmarcRes.Policy != nil {
+				err = m.AddHeader("X-DMARC-Policy", dmarcRes.Policy.Policy)
+				if err != nil {
+					return nil, err
+				}
+			}
+			
+			if dmarcRes.Alignment != nil {
+				err = m.AddHeader("X-DMARC-SPF-Aligned", fmt.Sprintf("%t", dmarcRes.Alignment.SPFAligned))
+				if err != nil {
+					return nil, err
+				}
+				
+				err = m.AddHeader("X-DMARC-DKIM-Aligned", fmt.Sprintf("%t", dmarcRes.Alignment.DKIMAligned))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		
 		// Add From domain header for DMARC preparation
 		if fromHeaderDomain != "" {
 			err := m.AddHeader("X-From-Domain", fromHeaderDomain)
@@ -434,6 +513,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		zap.String("ip", e.clientIP.String()),
 		zap.Any("spf", spfRes),
 		zap.Any("dkim", dkimRes),
+		zap.Any("dmarc", dmarcRes),
 		zap.Float64("total", total),
 		zap.String("decision", decision),
 		zap.Duration("duration", time.Since(start)),
