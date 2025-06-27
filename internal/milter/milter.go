@@ -284,8 +284,8 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 	// Start DKIM check in goroutine
 	go func() {
 		defer wg.Done()
-		
-               res, err := dkim.VerifyForDMARC(e.rawEmail.Bytes(), fromHeaderDomain, e.id)
+
+		res, err := dkim.VerifyForDMARC(e.rawEmail.Bytes(), fromHeaderDomain, e.id)
 		if err != nil {
 			e.logger.Error("Error verifying DKIM", zap.Error(err))
 			return
@@ -310,7 +310,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			zap.Duration("timeout", timeout),
 			zap.Bool("spf_completed", spfRes != nil),
 			zap.Bool("dkim_completed", dkimRes != nil))
-		
+
 		// Provide default results for incomplete checks
 		if spfRes == nil {
 			spfRes = &types.SPFResult{Result: "timeout", Score: 2}
@@ -328,11 +328,11 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			Timeout:  5 * time.Second,
 			CacheTTL: 4 * time.Hour,
 		})
-		
+
 		// Perform DMARC verification
 		dmarcCtx, dmarcCancel := context.WithTimeout(ctx, 5*time.Second)
 		defer dmarcCancel()
-		
+
 		dmarcResult, err := dmarcVerifier.Verify(dmarcCtx, fromHeaderDomain, spfRes, dkimRes)
 		if err != nil {
 			e.logger.Error("Error verifying DMARC",
@@ -376,7 +376,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// Add SPF headers
 		if spfRes != nil {
 			err := m.AddHeader("X-SPF-Result", spfRes.Result)
@@ -394,7 +394,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				return nil, err
 			}
 		}
-		
+
 		// Add enhanced DKIM headers
 		if dkimRes != nil {
 			// Main DKIM result header
@@ -406,33 +406,50 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			if err != nil {
 				return nil, err
 			}
-			
+
 			// Enhanced DKIM information headers
 			err = m.AddHeader("X-DKIM-Signatures", fmt.Sprintf("%d", dkimRes.TotalSignatures))
 			if err != nil {
 				return nil, err
 			}
-			
+
 			err = m.AddHeader("X-DKIM-Valid", fmt.Sprintf("%d", dkimRes.ValidSignatures))
 			if err != nil {
 				return nil, err
 			}
-			
+
 			if dkimRes.Domain != "" {
 				err = m.AddHeader("X-DKIM-Domain", dkimRes.Domain)
 				if err != nil {
 					return nil, err
 				}
 			}
-			
+
 			// Add edge case information if present
-			if dkimRes.EdgeCaseInfo != nil && len(dkimRes.EdgeCaseInfo.Anomalies) > 0 {
-				err = m.AddHeader("X-DKIM-Anomalies", fmt.Sprintf("%v", dkimRes.EdgeCaseInfo.Anomalies))
+			if dkimRes.EdgeCaseInfo != nil {
+				if len(dkimRes.EdgeCaseInfo.Anomalies) > 0 {
+					err = m.AddHeader("X-DKIM-Anomalies", fmt.Sprintf("%v", dkimRes.EdgeCaseInfo.Anomalies))
+					if err != nil {
+						return nil, err
+					}
+				}
+
+				err = m.AddHeader("X-DKIM-Threat-Level", string(dkimRes.EdgeCaseInfo.ThreatLevel))
 				if err != nil {
 					return nil, err
 				}
-				
-				err = m.AddHeader("X-DKIM-Threat-Level", string(dkimRes.EdgeCaseInfo.ThreatLevel))
+
+				err = m.AddHeader("X-DKIM-Threat-Description", dkimRes.EdgeCaseInfo.ThreatDescription)
+				if err != nil {
+					return nil, err
+				}
+
+				err = m.AddHeader("X-DKIM-Recommended-Action", dkimRes.EdgeCaseInfo.RecommendedAction)
+				if err != nil {
+					return nil, err
+				}
+
+				err = m.AddHeader("X-DKIM-Confidence-Score", fmt.Sprintf("%.2f", dkimRes.EdgeCaseInfo.ConfidenceScore))
 				if err != nil {
 					return nil, err
 				}
@@ -443,7 +460,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				return nil, err
 			}
 		}
-		
+
 		// Add DMARC headers
 		if dmarcRes != nil {
 			dmarcStatus := "fail"
@@ -454,32 +471,32 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			if err != nil {
 				return nil, err
 			}
-			
+
 			err = m.AddHeader("X-DMARC-Disposition", dmarcRes.Disposition)
 			if err != nil {
 				return nil, err
 			}
-			
+
 			if dmarcRes.Policy != nil {
 				err = m.AddHeader("X-DMARC-Policy", dmarcRes.Policy.Policy)
 				if err != nil {
 					return nil, err
 				}
 			}
-			
+
 			if dmarcRes.Alignment != nil {
 				err = m.AddHeader("X-DMARC-SPF-Aligned", fmt.Sprintf("%t", dmarcRes.Alignment.SPFAligned))
 				if err != nil {
 					return nil, err
 				}
-				
+
 				err = m.AddHeader("X-DMARC-DKIM-Aligned", fmt.Sprintf("%t", dmarcRes.Alignment.DKIMAligned))
 				if err != nil {
 					return nil, err
 				}
 			}
 		}
-		
+
 		// Add From domain header for DMARC preparation
 		if fromHeaderDomain != "" {
 			err := m.AddHeader("X-From-Domain", fromHeaderDomain)
@@ -487,7 +504,7 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				return nil, err
 			}
 		}
-		
+
 		err = m.AddHeader("X-Spam-Status", decision)
 		if err != nil {
 			return nil, err
@@ -550,10 +567,10 @@ func extractFromHeaderDomain(fromHeader string) string {
 	// "John Doe <john@example.com>" -> "example.com"
 	// "john@example.com" -> "example.com"
 	// "<john@example.com>" -> "example.com"
-	
+
 	// Remove display name and quotes
 	fromHeader = strings.TrimSpace(fromHeader)
-	
+
 	// Extract email from angle brackets if present
 	if strings.Contains(fromHeader, "<") && strings.Contains(fromHeader, ">") {
 		start := strings.Index(fromHeader, "<")
@@ -562,23 +579,23 @@ func extractFromHeaderDomain(fromHeader string) string {
 			fromHeader = fromHeader[start+1 : end]
 		}
 	}
-	
+
 	// Remove any remaining quotes
 	fromHeader = strings.Trim(fromHeader, "\"'")
 	fromHeader = strings.TrimSpace(fromHeader)
-	
+
 	// Find the @ symbol
 	atIndex := strings.LastIndex(fromHeader, "@")
 	if atIndex == -1 || atIndex == len(fromHeader)-1 {
 		return ""
 	}
-	
+
 	// Extract domain part
 	domain := fromHeader[atIndex+1:]
 	domain = strings.ToLower(strings.TrimSpace(domain))
-	
+
 	// Remove any trailing characters that shouldn't be in a domain
 	domain = strings.Trim(domain, " \t\r\n>)")
-	
+
 	return domain
 }
