@@ -609,6 +609,9 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 			zap.Int("results_count", len(verifs)))
 	}
 
+	// Extract DKIM-Signature headers from raw email
+	dkimHeaders := extractDKIMHeaders(rawEmail)
+	
 	// Process each signature verification result
 	for i, v := range verifs {
 		if logger != nil {
@@ -619,10 +622,18 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 				zap.Error(v.Err))
 		}
 
+		// Extract selector from corresponding DKIM-Signature header
+		selector := "unknown"
+		if i < len(dkimHeaders) {
+			if s, err := parseSelector(dkimHeaders[i]); err == nil {
+				selector = s
+			}
+		}
+
 		// Create detailed signature result
 		sigResult := types.DKIMSignatureResult{
 			Domain:    v.Domain,
-			Selector:  extractSelectorFromDomain(v.Domain), // Extract from domain since it's not directly available
+			Selector:  selector,
 			Valid:     v.Err == nil,
 			Algorithm: "rsa-sha256", // Default, will be enhanced later with signature parsing
 		}
@@ -818,6 +829,55 @@ func lookupTXTWithCache(ctx context.Context, domain string) ([]string, error) {
 		}
 	}
 	return txts, nil
+}
+
+// extractDKIMHeaders extracts all DKIM-Signature headers from raw email
+func extractDKIMHeaders(rawEmail []byte) []string {
+	var headers []string
+	lines := strings.Split(string(rawEmail), "\n")
+	
+	var currentHeader strings.Builder
+	inDKIMHeader := false
+	
+	for _, line := range lines {
+		// Empty line marks end of headers
+		if strings.TrimSpace(line) == "" {
+			if inDKIMHeader && currentHeader.Len() > 0 {
+				headers = append(headers, currentHeader.String())
+			}
+			break
+		}
+		
+		// Check if line starts a new DKIM-Signature header
+		if strings.HasPrefix(strings.ToLower(line), "dkim-signature:") {
+			// Save previous header if exists
+			if inDKIMHeader && currentHeader.Len() > 0 {
+				headers = append(headers, currentHeader.String())
+			}
+			
+			// Start new header
+			currentHeader.Reset()
+			currentHeader.WriteString(line[15:]) // Skip "DKIM-Signature:"
+			inDKIMHeader = true
+		} else if inDKIMHeader && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) {
+			// Continuation of DKIM header (folded line)
+			currentHeader.WriteString(strings.TrimSpace(line))
+		} else if inDKIMHeader {
+			// End of DKIM header
+			if currentHeader.Len() > 0 {
+				headers = append(headers, currentHeader.String())
+			}
+			currentHeader.Reset()
+			inDKIMHeader = false
+		}
+	}
+	
+	// Don't forget the last header if email doesn't end with blank line
+	if inDKIMHeader && currentHeader.Len() > 0 {
+		headers = append(headers, currentHeader.String())
+	}
+	
+	return headers
 }
 
 // extractSelectorFromDomain extracts the selector from a DKIM lookup domain
