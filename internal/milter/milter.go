@@ -454,6 +454,25 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 					return nil, err
 				}
 			}
+
+			if dkimRes.PerformanceInfo != nil {
+				err = m.AddHeader("X-DKIM-Processing-Time", fmt.Sprintf("%d", dkimRes.PerformanceInfo.ProcessingTime))
+				if err != nil {
+					return nil, err
+				}
+				err = m.AddHeader("X-DKIM-DNS-Lookup-Time", fmt.Sprintf("%d", dkimRes.PerformanceInfo.DNSLookupTime))
+				if err != nil {
+					return nil, err
+				}
+				err = m.AddHeader("X-DKIM-Cache-Hit-Rate", fmt.Sprintf("%.2f", dkimRes.PerformanceInfo.CacheHitRate))
+				if err != nil {
+					return nil, err
+				}
+				err = m.AddHeader("X-DKIM-Workers-Used", fmt.Sprintf("%d", dkimRes.PerformanceInfo.ParallelWorkers))
+				if err != nil {
+					return nil, err
+				}
+			}
 		} else {
 			err := m.AddHeader("X-DKIM-Result", "none")
 			if err != nil {

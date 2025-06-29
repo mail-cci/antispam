@@ -519,6 +519,9 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 	start := time.Now()
 	metrics.DKIMChecksTotal.Inc()
 
+	var dnsTime time.Duration
+	var cacheHits, cacheMisses int
+
 	// Setup a context with timeout for DNS lookups if configured.
 	ctx := context.Background()
 	if cfg != nil && cfg.Auth.DKIM.Timeout > 0 {
@@ -540,7 +543,14 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 				zap.String("domain", domain))
 		}
 
-		result, err := lookupTXTWithCache(ctx, domain)
+		dnsStart := time.Now()
+		result, cached, err := lookupTXTWithCache(ctx, domain)
+		if cached {
+			cacheHits++
+		} else {
+			cacheMisses++
+		}
+		dnsTime += time.Since(dnsStart)
 
 		if logger != nil {
 			logger.Debug("DNS lookup completed",
@@ -611,7 +621,7 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 
 	// Extract DKIM-Signature headers from raw email
 	dkimHeaders := extractDKIMHeaders(rawEmail)
-	
+
 	// Process each signature verification result
 	for i, v := range verifs {
 		if logger != nil {
@@ -726,10 +736,21 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 			zap.Float64("score", res.Score),
 		)
 	}
+	hitRate := 0.0
+	totalCache := cacheHits + cacheMisses
+	if totalCache > 0 {
+		hitRate = float64(cacheHits) / float64(totalCache)
+	}
+	res.PerformanceInfo = &types.DKIMPerformanceInfo{
+		ProcessingTime:  time.Since(start).Microseconds(),
+		DNSLookupTime:   dnsTime.Microseconds(),
+		CacheHitRate:    hitRate,
+		ParallelWorkers: 1,
+	}
 	return res, nil
 }
 
-func lookupTXTWithCache(ctx context.Context, domain string) ([]string, error) {
+func lookupTXTWithCache(ctx context.Context, domain string) ([]string, bool, error) {
 	if logger != nil {
 		logger.Debug("DNS TXT lookup with cache",
 			zap.String("step", "cache_lookup_start"),
@@ -769,7 +790,7 @@ func lookupTXTWithCache(ctx context.Context, domain string) ([]string, error) {
 						zap.String("cache_key", cacheKey),
 						zap.String("value_preview", truncateString(val, 100)))
 				}
-				return []string{val}, nil
+				return []string{val}, true, nil
 			} else if logger != nil {
 				logger.Debug("DKIM key not found in cache",
 					zap.String("step", "cache_miss"),
@@ -793,7 +814,7 @@ func lookupTXTWithCache(ctx context.Context, domain string) ([]string, error) {
 				zap.String("domain", domain),
 				zap.Error(err))
 		}
-		return nil, err
+		return nil, false, err
 	}
 
 	if logger != nil {
@@ -828,17 +849,17 @@ func lookupTXTWithCache(ctx context.Context, domain string) ([]string, error) {
 				zap.Error(err))
 		}
 	}
-	return txts, nil
+	return txts, false, nil
 }
 
 // extractDKIMHeaders extracts all DKIM-Signature headers from raw email
 func extractDKIMHeaders(rawEmail []byte) []string {
 	var headers []string
 	lines := strings.Split(string(rawEmail), "\n")
-	
+
 	var currentHeader strings.Builder
 	inDKIMHeader := false
-	
+
 	for _, line := range lines {
 		// Empty line marks end of headers
 		if strings.TrimSpace(line) == "" {
@@ -847,14 +868,14 @@ func extractDKIMHeaders(rawEmail []byte) []string {
 			}
 			break
 		}
-		
+
 		// Check if line starts a new DKIM-Signature header
 		if strings.HasPrefix(strings.ToLower(line), "dkim-signature:") {
 			// Save previous header if exists
 			if inDKIMHeader && currentHeader.Len() > 0 {
 				headers = append(headers, currentHeader.String())
 			}
-			
+
 			// Start new header
 			currentHeader.Reset()
 			currentHeader.WriteString(line[15:]) // Skip "DKIM-Signature:"
@@ -871,12 +892,12 @@ func extractDKIMHeaders(rawEmail []byte) []string {
 			inDKIMHeader = false
 		}
 	}
-	
+
 	// Don't forget the last header if email doesn't end with blank line
 	if inDKIMHeader && currentHeader.Len() > 0 {
 		headers = append(headers, currentHeader.String())
 	}
-	
+
 	return headers
 }
 
@@ -936,11 +957,6 @@ func scoreSignatureQuality(sig *types.DKIMSignatureResult) float64 {
 	if sig.KeyLength >= 2048 {
 		score += 2.0
 	} else if sig.KeyLength >= 1024 {
-		score += 1.0
-	}
-
-	// Prefer signatures without expiration (more stable)
-	if sig.Expiration == 0 {
 		score += 1.0
 	}
 
@@ -1123,7 +1139,7 @@ func calculatePartialCreditScore(result *types.DKIMResult) float64 {
 
 // VerifyForDMARC performs DKIM verification specifically for DMARC alignment checking
 func VerifyForDMARC(rawEmail []byte, fromDomain, correlationID string) (*types.DKIMResult, error) {
-       result, err := VerifyWithCorrelationID(rawEmail, correlationID)
+	result, err := VerifyWithCorrelationID(rawEmail, correlationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1353,14 +1369,14 @@ func analyzeHashAlgorithms(signatures []types.DKIMSignatureResult, info *types.D
 		}
 	}
 
-// Check for mixed hash algorithms
-if len(hashAlgorithms) > 1 {
-info.Anomalies = append(info.Anomalies, types.AnomalyMixedHashAlgorithms)
-}
+	// Check for mixed hash algorithms
+	if len(hashAlgorithms) > 1 {
+		info.Anomalies = append(info.Anomalies, types.AnomalyMixedHashAlgorithms)
+	}
 
-if weakHashCount > 0 {
-info.Anomalies = append(info.Anomalies, types.AnomalyWeakHashAlgorithm)
-}
+	if weakHashCount > 0 {
+		info.Anomalies = append(info.Anomalies, types.AnomalyWeakHashAlgorithm)
+	}
 }
 
 // analyzeSignatureTiming checks for timing-related anomalies
