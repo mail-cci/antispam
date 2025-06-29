@@ -2,11 +2,19 @@ package dkim
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/mail-cci/antispam/internal/types"
 	"go.uber.org/zap"
+)
+
+// default selectors and domains used for cache warming
+var (
+	commonSelectors       = []string{"default", "selector1", "selector2", "mail", "dkim"}
+	commonProviderDomains = []string{"gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com"}
 )
 
 // CacheSignatureResult caches DKIM signature verification results
@@ -54,25 +62,24 @@ func GetCachedSignatureResult(domain, selector string) *types.DKIMSignatureResul
 
 	cacheKey := fmt.Sprintf("dkim:result:%s:%s", selector, domain)
 
-	var cacheEntry types.DKIMCacheEntry
-	if err := rdb.Get(context.Background(), cacheKey).Scan(&cacheEntry); err != nil {
+	var entry types.DKIMCacheEntry
+	if err := rdb.Get(context.Background(), cacheKey).Scan(&entry); err != nil {
+		if performanceMonitor != nil {
+			performanceMonitor.RecordCacheMiss()
+		}
 		return nil
 	}
 
-	// Check expiration
-	if cacheEntry.Expiration < time.Now().Unix() {
+	if entry.Expiration < time.Now().Unix() {
 		return nil
 	}
 
-	// Update hit count
-	cacheEntry.HitCount++
-	rdb.Set(context.Background(), cacheKey, cacheEntry, time.Duration(cacheEntry.TTL)*time.Second)
+	entry.HitCount++
+	rdb.Set(context.Background(), cacheKey, entry, time.Duration(entry.TTL)*time.Second)
 
-	if result, ok := cacheEntry.Value.(*types.DKIMSignatureResult); ok {
-		if logger != nil {
-			logger.Debug("signature result cache hit",
-				zap.String("cache_key", cacheKey),
-				zap.Int64("hit_count", cacheEntry.HitCount))
+	if result, ok := entry.Value.(*types.DKIMSignatureResult); ok {
+		if performanceMonitor != nil {
+			performanceMonitor.RecordCacheHit()
 		}
 		return result
 	}
@@ -80,9 +87,82 @@ func GetCachedSignatureResult(domain, selector string) *types.DKIMSignatureResul
 	return nil
 }
 
+// PreloadCommonSelectors warms the cache for a predefined list of provider
+// domains and selectors. This helps reduce DNS latency for popular services.
+func PreloadCommonSelectors() {
+	if rdb == nil {
+		return
+	}
+
+	for _, domain := range commonProviderDomains {
+		for _, selector := range commonSelectors {
+			lookupDomain := fmt.Sprintf("%s._domainkey.%s", selector, domain)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, _, _ = lookupTXTWithCache(ctx, lookupDomain)
+			cancel()
+		}
+	}
+	if logger != nil {
+		logger.Info("preloaded common DKIM selectors", zap.Int("domains", len(commonProviderDomains)))
+	}
+}
+
+// CacheVerificationResult stores a DKIM verification result keyed by the
+// message hash. The result is serialized as JSON for portability.
+func CacheVerificationResult(hash string, result *types.DKIMResult, ttl time.Duration) {
+	if rdb == nil || result == nil || hash == "" {
+		return
+	}
+
+	key := fmt.Sprintf("dkim:verification:%s", hash)
+	data, err := json.Marshal(result)
+	if err != nil {
+		if logger != nil {
+			logger.Debug("failed to marshal verification result", zap.Error(err))
+		}
+		return
+	}
+	if err := rdb.Set(context.Background(), key, data, ttl).Err(); err != nil {
+		if logger != nil {
+			logger.Debug("failed to cache verification result", zap.String("key", key), zap.Error(err))
+		}
+	} else if logger != nil {
+		logger.Debug("cached verification result", zap.String("key", key), zap.Duration("ttl", ttl))
+	}
+}
+
+// GetCachedVerificationResult retrieves a cached DKIM verification result by
+// message hash. It returns nil on cache miss or decode error.
+func GetCachedVerificationResult(hash string) *types.DKIMResult {
+	if rdb == nil || hash == "" {
+		return nil
+	}
+
+	key := fmt.Sprintf("dkim:verification:%s", hash)
+	val, err := rdb.Get(context.Background(), key).Bytes()
+	if err != nil {
+		if err != redis.Nil && logger != nil {
+			logger.Debug("verification result cache miss", zap.String("key", key), zap.Error(err))
+		}
+		return nil
+	}
+
+	var res types.DKIMResult
+	if err := json.Unmarshal(val, &res); err != nil {
+		if logger != nil {
+			logger.Debug("failed to unmarshal cached verification", zap.String("key", key), zap.Error(err))
+		}
+		return nil
+	}
+	if performanceMonitor != nil {
+		performanceMonitor.RecordCacheHit()
+	}
+	return &res
+}
+
 // PrewarmCache implements cache warming strategies
 func PrewarmCache(domains []string) {
-	if len(domains) == 0 || workerPool == nil || !workerPool.running {
+	if len(domains) == 0 {
 		return
 	}
 
@@ -92,8 +172,6 @@ func PrewarmCache(domains []string) {
 	}
 
 	// Prewarm common selectors for each domain
-	commonSelectors := []string{"default", "selector1", "selector2", "mail", "dkim"}
-
 	for _, domain := range domains {
 		for _, selector := range commonSelectors {
 			lookupDomain := fmt.Sprintf("%s._domainkey.%s", selector, domain)

@@ -3,6 +3,8 @@ package dkim
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"regexp"
@@ -396,6 +398,20 @@ func (p *PerformanceMonitor) GetStats() types.DKIMPerformanceInfo {
 	}
 }
 
+// RecordCacheHit increments cache hit counter in a thread-safe manner
+func (p *PerformanceMonitor) RecordCacheHit() {
+	p.mu.Lock()
+	p.cacheHits++
+	p.mu.Unlock()
+}
+
+// RecordCacheMiss increments cache miss counter in a thread-safe manner
+func (p *PerformanceMonitor) RecordCacheMiss() {
+	p.mu.Lock()
+	p.cacheMisses++
+	p.mu.Unlock()
+}
+
 // GetStats returns a copy of the local cache statistics.
 func (l *LocalCache) GetStats() CacheStats {
 	l.mu.RLock()
@@ -441,6 +457,11 @@ func Init(c *config.Config, l *zap.Logger) {
 	} else {
 		rdb = nil
 	}
+
+	performanceMonitor = &PerformanceMonitor{}
+
+	// Warm cache for common providers
+	go PreloadCommonSelectors()
 }
 
 func scoreFor(valid bool) float64 {
@@ -463,6 +484,12 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// messageHash calculates a SHA-256 hash of the raw email used for caching
+func messageHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // addCorrelationID adds correlation ID to log fields if provided
@@ -501,6 +528,18 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 	res := &types.DKIMResult{
 		Signatures:          make([]types.DKIMSignatureResult, 0),
 		AlignmentCandidates: make([]types.AlignmentCandidate, 0),
+	}
+
+	// Check cache using message hash
+	hash := messageHash(rawEmail)
+	if cached := GetCachedVerificationResult(hash); cached != nil {
+		if logger != nil {
+			logger.Debug("dkim verification cache hit", zap.String("hash", hash))
+		}
+		return cached, nil
+	}
+	if performanceMonitor != nil {
+		performanceMonitor.RecordCacheMiss()
 	}
 
 	// Create logger with correlation ID if provided
@@ -747,6 +786,13 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 		CacheHitRate:    hitRate,
 		ParallelWorkers: 1,
 	}
+	if rdb != nil {
+		ttl := cfg.Auth.DKIM.CacheTTL
+		if ttl == 0 {
+			ttl = time.Hour
+		}
+		CacheVerificationResult(hash, res, ttl)
+	}
 	return res, nil
 }
 
@@ -784,6 +830,9 @@ func lookupTXTWithCache(ctx context.Context, domain string) ([]string, bool, err
 
 		if rdb != nil {
 			if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+				if performanceMonitor != nil {
+					performanceMonitor.RecordCacheHit()
+				}
 				if logger != nil {
 					logger.Debug("DKIM key found in cache",
 						zap.String("step", "cache_hit"),
@@ -791,11 +840,16 @@ func lookupTXTWithCache(ctx context.Context, domain string) ([]string, bool, err
 						zap.String("value_preview", truncateString(val, 100)))
 				}
 				return []string{val}, true, nil
-			} else if logger != nil {
-				logger.Debug("DKIM key not found in cache",
-					zap.String("step", "cache_miss"),
-					zap.String("cache_key", cacheKey),
-					zap.String("cache_error", err.Error()))
+			} else {
+				if performanceMonitor != nil {
+					performanceMonitor.RecordCacheMiss()
+				}
+				if logger != nil {
+					logger.Debug("DKIM key not found in cache",
+						zap.String("step", "cache_miss"),
+						zap.String("cache_key", cacheKey),
+						zap.String("cache_error", err.Error()))
+				}
 			}
 		}
 	}
