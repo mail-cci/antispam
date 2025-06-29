@@ -14,9 +14,9 @@ func CacheSignatureResult(domain, selector string, result *types.DKIMSignatureRe
 	if result == nil || rdb == nil {
 		return
 	}
-	
+
 	cacheKey := fmt.Sprintf("dkim:result:%s:%s", selector, domain)
-	
+
 	// Create cache entry with signature result
 	cacheEntry := types.DKIMCacheEntry{
 		Key: types.DKIMCacheKey{
@@ -31,7 +31,7 @@ func CacheSignatureResult(domain, selector string, result *types.DKIMSignatureRe
 		HitCount:   0,
 		Size:       int64(len(fmt.Sprintf("%+v", result))),
 	}
-	
+
 	if err := rdb.Set(context.Background(), cacheKey, cacheEntry, ttl).Err(); err != nil {
 		if logger != nil {
 			logger.Debug("failed to cache signature result",
@@ -51,23 +51,23 @@ func GetCachedSignatureResult(domain, selector string) *types.DKIMSignatureResul
 	if rdb == nil {
 		return nil
 	}
-	
+
 	cacheKey := fmt.Sprintf("dkim:result:%s:%s", selector, domain)
-	
+
 	var cacheEntry types.DKIMCacheEntry
 	if err := rdb.Get(context.Background(), cacheKey).Scan(&cacheEntry); err != nil {
 		return nil
 	}
-	
+
 	// Check expiration
 	if cacheEntry.Expiration < time.Now().Unix() {
 		return nil
 	}
-	
+
 	// Update hit count
 	cacheEntry.HitCount++
 	rdb.Set(context.Background(), cacheKey, cacheEntry, time.Duration(cacheEntry.TTL)*time.Second)
-	
+
 	if result, ok := cacheEntry.Value.(*types.DKIMSignatureResult); ok {
 		if logger != nil {
 			logger.Debug("signature result cache hit",
@@ -76,7 +76,7 @@ func GetCachedSignatureResult(domain, selector string) *types.DKIMSignatureResul
 		}
 		return result
 	}
-	
+
 	return nil
 }
 
@@ -85,29 +85,29 @@ func PrewarmCache(domains []string) {
 	if len(domains) == 0 || workerPool == nil || !workerPool.running {
 		return
 	}
-	
+
 	if logger != nil {
 		logger.Info("starting cache prewarming",
 			zap.Int("domain_count", len(domains)))
 	}
-	
+
 	// Prewarm common selectors for each domain
 	commonSelectors := []string{"default", "selector1", "selector2", "mail", "dkim"}
-	
+
 	for _, domain := range domains {
 		for _, selector := range commonSelectors {
 			lookupDomain := fmt.Sprintf("%s._domainkey.%s", selector, domain)
-			
+
 			// Async DNS lookup to warm cache
 			go func(d string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				
-				_, _ = lookupTXTWithCache(ctx, d)
+
+				_, _, _ = lookupTXTWithCache(ctx, d)
 			}(lookupDomain)
 		}
 	}
-	
+
 	if logger != nil {
 		logger.Info("cache prewarming initiated",
 			zap.Int("total_lookups", len(domains)*len(commonSelectors)))
@@ -117,7 +117,7 @@ func PrewarmCache(domains []string) {
 // GetCacheStats returns comprehensive cache statistics
 func GetCacheStats() map[string]interface{} {
 	stats := make(map[string]interface{})
-	
+
 	// Local cache statistics
 	if localCache != nil {
 		localStats := localCache.GetStats()
@@ -129,7 +129,7 @@ func GetCacheStats() map[string]interface{} {
 			"entry_count": localStats.EntryCount,
 		}
 	}
-	
+
 	// Performance monitor statistics
 	if performanceMonitor != nil {
 		perfStats := performanceMonitor.GetStats()
@@ -141,6 +141,6 @@ func GetCacheStats() map[string]interface{} {
 			"early_termination":  perfStats.EarlyTermination,
 		}
 	}
-	
+
 	return stats
 }
