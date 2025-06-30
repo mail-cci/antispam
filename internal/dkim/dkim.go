@@ -288,17 +288,13 @@ func getErrorInfo(err error) *DKIMErrorInfo {
 
 // DKIMWorkerPool manages parallel DKIM signature verification
 type DKIMWorkerPool struct {
-	config      types.DKIMWorkerPoolConfig
-	workQueue   chan *SignatureWork
-	resultQueue chan *SignatureResult
-	dnsQueue    chan *DNSWork
-	dnsWorkers  []*DNSWorker
-	workers     []*Worker
-	mu          sync.RWMutex
-	running     bool
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
+	config    types.DKIMWorkerPoolConfig
+	workQueue chan *verifyRequest
+	mu        sync.RWMutex
+	running   bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 }
 
 // SignatureWork represents work for signature verification
@@ -412,6 +408,22 @@ func (p *PerformanceMonitor) RecordCacheMiss() {
 	p.mu.Unlock()
 }
 
+// RecordWorkerStart tracks the start of a worker processing job.
+func (p *PerformanceMonitor) RecordWorkerStart() {
+	p.mu.Lock()
+	p.parallelJobs++
+	p.mu.Unlock()
+}
+
+// RecordWorkerEnd tracks the completion of a worker job.
+func (p *PerformanceMonitor) RecordWorkerEnd() {
+	p.mu.Lock()
+	if p.parallelJobs > 0 {
+		p.parallelJobs--
+	}
+	p.mu.Unlock()
+}
+
 // GetStats returns a copy of the local cache statistics.
 func (l *LocalCache) GetStats() CacheStats {
 	l.mu.RLock()
@@ -459,6 +471,9 @@ func Init(c *config.Config, l *zap.Logger) {
 	}
 
 	performanceMonitor = &PerformanceMonitor{}
+	// Initialize and start the worker pool with default configuration
+	workerPool = NewDKIMWorkerPool(types.DKIMWorkerPoolConfig{})
+	workerPool.Start()
 
 	// Warm cache for common providers synchronously to avoid races in tests
 	PreloadCommonSelectors()
@@ -523,8 +538,17 @@ func Verify(rawEmail []byte) (*types.DKIMResult, error) {
 	return VerifyWithCorrelationID(rawEmail, "")
 }
 
-// VerifyWithCorrelationID checks all DKIM signatures in the provided raw email with correlation ID for debugging.
+// VerifyWithCorrelationID checks all DKIM signatures in the provided raw email.
+// When the worker pool is running, verification is dispatched through the pool.
 func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIMResult, error) {
+	if workerPool != nil && workerPool.running {
+		return workerPool.Submit(rawEmail, correlationID)
+	}
+	return verifyInternal(rawEmail, correlationID)
+}
+
+// VerifyWithCorrelationID checks all DKIM signatures in the provided raw email with correlation ID for debugging.
+func verifyInternal(rawEmail []byte, correlationID string) (*types.DKIMResult, error) {
 	res := &types.DKIMResult{
 		Signatures:          make([]types.DKIMSignatureResult, 0),
 		AlignmentCandidates: make([]types.AlignmentCandidate, 0),
