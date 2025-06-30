@@ -460,8 +460,8 @@ func Init(c *config.Config, l *zap.Logger) {
 
 	performanceMonitor = &PerformanceMonitor{}
 
-	// Warm cache for common providers
-	go PreloadCommonSelectors()
+	// Warm cache for common providers synchronously to avoid races in tests
+	PreloadCommonSelectors()
 }
 
 func scoreFor(valid bool) float64 {
@@ -532,6 +532,7 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 
 	// Check cache using message hash
 	hash := messageHash(rawEmail)
+	metrics.DKIMChecksTotal.Inc()
 	if cached := GetCachedVerificationResult(hash); cached != nil {
 		if logger != nil {
 			logger.Debug("dkim verification cache hit", zap.String("hash", hash))
@@ -556,7 +557,6 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 	}
 
 	start := time.Now()
-	metrics.DKIMChecksTotal.Inc()
 
 	var dnsTime time.Duration
 	var cacheHits, cacheMisses int
@@ -754,6 +754,11 @@ func VerifyWithCorrelationID(rawEmail []byte, correlationID string) (*types.DKIM
 
 	// Detect edge cases and anomalies
 	res.EdgeCaseInfo = detectEdgeCases(res.Signatures)
+
+	// Compare signatures for additional context
+	res.DomainAgreement = signaturesDomainAgreement(res.Signatures)
+	res.SelectorReuse = signaturesSelectorReuse(res.Signatures)
+	res.RolloverDetected = signaturesRolloverDetected(res.Signatures)
 
 	// Calculate enhanced score based on multiple signatures with graceful degradation
 	res.Score = calculateEnhancedScoreWithDegradation(res)
@@ -984,6 +989,71 @@ func selectBestSignature(signatures []types.DKIMSignatureResult) *types.DKIMSign
 	}
 
 	return best
+}
+
+// signaturesDomainAgreement returns true if all (valid) signatures share the same domain.
+func signaturesDomainAgreement(signatures []types.DKIMSignatureResult) bool {
+	var domain string
+	found := false
+	for _, sig := range signatures {
+		if sig.Valid {
+			if !found {
+				domain = strings.ToLower(sig.Domain)
+				found = true
+			} else if !strings.EqualFold(domain, sig.Domain) {
+				return false
+			}
+		}
+	}
+	if found {
+		return true
+	}
+	for i, sig := range signatures {
+		if i == 0 {
+			domain = strings.ToLower(sig.Domain)
+		} else if !strings.EqualFold(domain, sig.Domain) {
+			return false
+		}
+	}
+	return true
+}
+
+// signaturesSelectorReuse detects if the same selector appears on multiple signatures.
+func signaturesSelectorReuse(signatures []types.DKIMSignatureResult) bool {
+	counts := make(map[string]int)
+	for _, sig := range signatures {
+		if sig.Selector != "" {
+			counts[sig.Selector]++
+		}
+	}
+	for _, c := range counts {
+		if c > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// signaturesRolloverDetected returns true if a single domain uses multiple selectors.
+func signaturesRolloverDetected(signatures []types.DKIMSignatureResult) bool {
+	domainSelectors := make(map[string]map[string]bool)
+	for _, sig := range signatures {
+		if sig.Domain == "" || sig.Selector == "" {
+			continue
+		}
+		m, ok := domainSelectors[sig.Domain]
+		if !ok {
+			m = make(map[string]bool)
+			domainSelectors[sig.Domain] = m
+		}
+		m[sig.Selector] = true
+	}
+	for _, sels := range domainSelectors {
+		if len(sels) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // scoreSignatureQuality calculates a quality score for a signature

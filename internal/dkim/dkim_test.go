@@ -179,9 +179,9 @@ func TestMultipleSignatures(t *testing.T) {
 	txtLookup = func(ctx context.Context, domain string) ([]string, uint32, error) {
 		switch domain {
 		case "sel1._domainkey.example.com":
-			return []string{fmt.Sprintf("v=DKIM1; p=%s", pub1B64)}, 60, nil
+			return []string{fmt.Sprintf("v=DKIM1; k=ed25519; p=%s", pub1B64)}, 60, nil
 		case "sel2._domainkey.example.com":
-			return []string{fmt.Sprintf("v=DKIM1; p=%s", pub2B64)}, 60, nil
+			return []string{fmt.Sprintf("v=DKIM1; k=ed25519; p=%s", pub2B64)}, 60, nil
 		default:
 			return nil, 0, fmt.Errorf("unexpected domain %s", domain)
 		}
@@ -189,7 +189,7 @@ func TestMultipleSignatures(t *testing.T) {
 	defer func() { txtLookup = defaultLookupTXT }()
 
 	raw := []byte("From: sender@example.com\r\n\r\nbody")
-	
+
 	// First signature
 	var signed1 bytes.Buffer
 	if err := godkim.Sign(&signed1, bytes.NewReader(raw), &godkim.SignOptions{
@@ -238,6 +238,16 @@ func TestMultipleSignatures(t *testing.T) {
 	if res.Score >= 0 {
 		t.Errorf("expected negative score for valid signatures, got %f", res.Score)
 	}
+
+	if !res.DomainAgreement {
+		t.Error("expected domain agreement")
+	}
+	if res.SelectorReuse {
+		t.Error("unexpected selector reuse detected")
+	}
+	if !res.RolloverDetected {
+		t.Error("expected rollover detection")
+	}
 }
 
 // TestEdgeCaseDetection tests the edge case detection functionality
@@ -246,15 +256,15 @@ func TestEdgeCaseDetection(t *testing.T) {
 	Init(cfg, zap.NewNop())
 
 	testCases := []struct {
-		name          string
-		signatures    []godkim.SignOptions
-		expectedAnoms int
+		name           string
+		signatures     []godkim.SignOptions
+		expectedAnoms  int
 		expectedThreat string
 	}{
 		{
-			name: "too_many_signatures",
-			signatures: make([]godkim.SignOptions, 12), // More than 10
-			expectedAnoms: 1,
+			name:           "too_many_signatures",
+			signatures:     make([]godkim.SignOptions, 12), // More than 10
+			expectedAnoms:  1,
 			expectedThreat: "low",
 		},
 		{
@@ -264,7 +274,7 @@ func TestEdgeCaseDetection(t *testing.T) {
 				{Domain: "different.com", Selector: "sel2"},
 				{Domain: "another.com", Selector: "sel3"},
 			},
-			expectedAnoms: 1,
+			expectedAnoms:  1,
 			expectedThreat: "low",
 		},
 	}
@@ -275,8 +285,8 @@ func TestEdgeCaseDetection(t *testing.T) {
 			if tc.name == "too_many_signatures" {
 				for i := range tc.signatures {
 					tc.signatures[i] = godkim.SignOptions{
-						Domain: "example.com",
-						Selector: fmt.Sprintf("sel%d", i),
+						Domain:     "example.com",
+						Selector:   fmt.Sprintf("sel%d", i),
 						HeaderKeys: []string{"From"},
 					}
 				}
@@ -338,12 +348,12 @@ func TestOrganizationalDomainExtraction(t *testing.T) {
 // TestDMARCAlignment tests DMARC alignment functionality
 func TestDMARCAlignment(t *testing.T) {
 	testCases := []struct {
-		name         string
-		fromDomain   string
-		sigDomain    string
-		mode         types.DMARCAlignmentMode
-		valid        bool
-		expected     bool
+		name       string
+		fromDomain string
+		sigDomain  string
+		mode       types.DMARCAlignmentMode
+		valid      bool
+		expected   bool
 	}{
 		{"strict_exact_match", "example.com", "example.com", types.AlignmentStrict, true, true},
 		{"strict_subdomain_fail", "example.com", "mail.example.com", types.AlignmentStrict, true, false},
@@ -446,7 +456,7 @@ func TestGracefulDegradation(t *testing.T) {
 // TestErrorMapping tests DKIM error code mapping
 func TestErrorMapping(t *testing.T) {
 	testCases := []struct {
-		error       string
+		error        string
 		expectedCode int
 		expectedCat  string
 		expectedSev  string
@@ -478,5 +488,36 @@ func TestErrorMapping(t *testing.T) {
 				t.Errorf("expected severity %s, got %s", tc.expectedSev, info.Severity)
 			}
 		})
+	}
+}
+
+// TestSignatureComparison verifies domain agreement, selector reuse and rollover detection
+func TestSignatureComparison(t *testing.T) {
+	sigs1 := []types.DKIMSignatureResult{
+		{Domain: "example.com", Selector: "s1", Valid: true},
+		{Domain: "example.com", Selector: "s2", Valid: true},
+	}
+	if !signaturesDomainAgreement(sigs1) {
+		t.Error("expected domain agreement for sigs1")
+	}
+	if signaturesSelectorReuse(sigs1) {
+		t.Error("did not expect selector reuse for sigs1")
+	}
+	if !signaturesRolloverDetected(sigs1) {
+		t.Error("expected rollover for sigs1")
+	}
+
+	sigs2 := []types.DKIMSignatureResult{
+		{Domain: "a.com", Selector: "s", Valid: true},
+		{Domain: "b.com", Selector: "s", Valid: true},
+	}
+	if signaturesDomainAgreement(sigs2) {
+		t.Error("expected domain disagreement for sigs2")
+	}
+	if !signaturesSelectorReuse(sigs2) {
+		t.Error("expected selector reuse for sigs2")
+	}
+	if signaturesRolloverDetected(sigs2) {
+		t.Error("did not expect rollover for sigs2")
 	}
 }
