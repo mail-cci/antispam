@@ -22,43 +22,43 @@ type DKIMSignatureResult struct {
 	Valid         bool
 	Domain        string
 	Selector      string
-	Algorithm     string    // Signing algorithm (rsa-sha256, etc.)
-	HashAlgorithm string    // Hash algorithm (sha256, sha1, etc.)
-	BodyLength    int64     // Length of body covered (-1 if entire body)
-	Headers       []string  // Headers included in signature
-	WeakHash      bool      // True if using SHA-1
-	KeyLength     int       // RSA key length in bits
-	Error         string    // Error message if verification failed
-	Timestamp     int64     // Signature timestamp if present
-	Expiration    int64     // Signature expiration if present
+	Algorithm     string   // Signing algorithm (rsa-sha256, etc.)
+	HashAlgorithm string   // Hash algorithm (sha256, sha1, etc.)
+	BodyLength    int64    // Length of body covered (-1 if entire body)
+	Headers       []string // Headers included in signature
+	WeakHash      bool     // True if using SHA-1
+	KeyLength     int      // RSA key length in bits
+	Error         string   // Error message if verification failed
+	Timestamp     int64    // Signature timestamp if present
+	Expiration    int64    // Signature expiration if present
 }
 
 // AlignmentCandidate represents a domain candidate for DMARC alignment
 type AlignmentCandidate struct {
-	Domain           string
-	Selector         string
-	Valid            bool
-	AlignmentMode    string // "strict" or "relaxed"
-	AlignmentResult  string // "pass", "fail", or "none"
+	Domain          string
+	Selector        string
+	Valid           bool
+	AlignmentMode   string // "strict" or "relaxed"
+	AlignmentResult string // "pass", "fail", or "none"
 }
 
 // DKIMAnomalyFlag represents different types of anomalies detected in DKIM signatures
 type DKIMAnomalyFlag string
 
 const (
-	AnomalyNone                    DKIMAnomalyFlag = ""
-	AnomalyMultipleValidDomains    DKIMAnomalyFlag = "multiple_valid_domains"
-	AnomalyMixedHashAlgorithms     DKIMAnomalyFlag = "mixed_hash_algorithms"
+	AnomalyNone                 DKIMAnomalyFlag = ""
+	AnomalyMultipleValidDomains DKIMAnomalyFlag = "multiple_valid_domains"
+	AnomalyMixedHashAlgorithms  DKIMAnomalyFlag = "mixed_hash_algorithms"
 	// AnomalyWeakHashAlgorithm is triggered when signatures use weak hash algorithms like SHA-1
-	AnomalyWeakHashAlgorithm       DKIMAnomalyFlag = "weak_hash_algorithm"
-	AnomalyExpiredSignatures       DKIMAnomalyFlag = "expired_signatures"
-	AnomalyFutureSignatures        DKIMAnomalyFlag = "future_signatures"
-	AnomalyTooManySignatures       DKIMAnomalyFlag = "too_many_signatures"
-	AnomalyWeakKeyLength           DKIMAnomalyFlag = "weak_key_length"
-	AnomalyInconsistentSelectors   DKIMAnomalyFlag = "inconsistent_selectors"
-	AnomalyDomainMismatch          DKIMAnomalyFlag = "domain_mismatch"
-	AnomalySignatureRollover       DKIMAnomalyFlag = "signature_rollover"
-	AnomalySuspiciousHeaderCount   DKIMAnomalyFlag = "suspicious_header_count"
+	AnomalyWeakHashAlgorithm     DKIMAnomalyFlag = "weak_hash_algorithm"
+	AnomalyExpiredSignatures     DKIMAnomalyFlag = "expired_signatures"
+	AnomalyFutureSignatures      DKIMAnomalyFlag = "future_signatures"
+	AnomalyTooManySignatures     DKIMAnomalyFlag = "too_many_signatures"
+	AnomalyWeakKeyLength         DKIMAnomalyFlag = "weak_key_length"
+	AnomalyInconsistentSelectors DKIMAnomalyFlag = "inconsistent_selectors"
+	AnomalyDomainMismatch        DKIMAnomalyFlag = "domain_mismatch"
+	AnomalySignatureRollover     DKIMAnomalyFlag = "signature_rollover"
+	AnomalySuspiciousHeaderCount DKIMAnomalyFlag = "suspicious_header_count"
 )
 
 // SecurityThreatLevel represents the security threat assessment
@@ -103,10 +103,10 @@ type DKIMCacheKey struct {
 type DKIMCacheEntry struct {
 	Key        DKIMCacheKey
 	Value      interface{}
-	Expiration int64   // Unix timestamp
-	TTL        int64   // TTL in seconds
-	HitCount   int64   // Number of cache hits
-	Size       int64   // Entry size in bytes
+	Expiration int64 // Unix timestamp
+	TTL        int64 // TTL in seconds
+	HitCount   int64 // Number of cache hits
+	Size       int64 // Entry size in bytes
 }
 
 // DKIMWorkerPool configuration
@@ -120,18 +120,21 @@ type DKIMWorkerPoolConfig struct {
 
 // DKIMResult represents DKIM verification outcomes for multiple signatures
 type DKIMResult struct {
-	Valid            bool                   // True if at least one signature is valid
-	Domain           string                 // Primary domain (first valid signature)
-	Selector         string                 // Primary selector (first valid signature)
-	Score            float64                // Calculated score based on all signatures
-	WeakHash         bool                   // True if any signature uses weak hash
-	Signatures       []DKIMSignatureResult  // All signature verification results
-	ValidSignatures  int                    // Count of valid signatures
-	TotalSignatures  int                    // Total count of signatures found
-	AlignmentCandidates []AlignmentCandidate // Domains available for DMARC alignment
-	BestSignature    *DKIMSignatureResult   // Best signature for scoring purposes
-	EdgeCaseInfo     *DKIMEdgeCaseInfo      // Edge case and anomaly information
-	PerformanceInfo  *DKIMPerformanceInfo   // Performance metrics and timing
+	Valid               bool                  // True if at least one signature is valid
+	Domain              string                // Primary domain (first valid signature)
+	Selector            string                // Primary selector (first valid signature)
+	Score               float64               // Calculated score based on all signatures
+	WeakHash            bool                  // True if any signature uses weak hash
+	DomainAgreement     bool                  // True if all signatures agree on domain
+	SelectorReuse       bool                  // True if a selector is reused across signatures
+	RolloverDetected    bool                  // True if multiple selectors used for one domain
+	Signatures          []DKIMSignatureResult // All signature verification results
+	ValidSignatures     int                   // Count of valid signatures
+	TotalSignatures     int                   // Total count of signatures found
+	AlignmentCandidates []AlignmentCandidate  // Domains available for DMARC alignment
+	BestSignature       *DKIMSignatureResult  // Best signature for scoring purposes
+	EdgeCaseInfo        *DKIMEdgeCaseInfo     // Edge case and anomaly information
+	PerformanceInfo     *DKIMPerformanceInfo  // Performance metrics and timing
 }
 
 // DMARCAlignmentMode represents DMARC alignment mode
@@ -155,26 +158,26 @@ type DMARCAlignmentResult struct {
 
 // DMARCPolicy represents DMARC policy information
 type DMARCPolicy struct {
-	Policy       string             // "none", "quarantine", "reject"
-	SubdomainPolicy string          // Subdomain policy if different
-	SPFAlignment DMARCAlignmentMode // Required SPF alignment mode
-	DKIMAlignment DMARCAlignmentMode // Required DKIM alignment mode
-	Percentage   int                // Policy application percentage
-	ReportURI    []string           // Aggregate report URIs
-	ForensicURI  []string           // Forensic report URIs
-	Domain       string             // Domain this policy applies to
-	TTL          uint32             // DNS record TTL
+	Policy          string             // "none", "quarantine", "reject"
+	SubdomainPolicy string             // Subdomain policy if different
+	SPFAlignment    DMARCAlignmentMode // Required SPF alignment mode
+	DKIMAlignment   DMARCAlignmentMode // Required DKIM alignment mode
+	Percentage      int                // Policy application percentage
+	ReportURI       []string           // Aggregate report URIs
+	ForensicURI     []string           // Forensic report URIs
+	Domain          string             // Domain this policy applies to
+	TTL             uint32             // DNS record TTL
 }
 
 // DMARCResult represents DMARC evaluation result
 type DMARCResult struct {
-	Valid       bool                 // Overall DMARC validation result
-	Policy      *DMARCPolicy         // DMARC policy found
+	Valid       bool                  // Overall DMARC validation result
+	Policy      *DMARCPolicy          // DMARC policy found
 	Alignment   *DMARCAlignmentResult // Alignment check results
-	Disposition string               // Final disposition ("none", "quarantine", "reject")
-	Reason      []string             // Reasons for the disposition
-	Score       float64              // DMARC contribution to spam score
-	Error       string               // Error message if evaluation failed
+	Disposition string                // Final disposition ("none", "quarantine", "reject")
+	Reason      []string              // Reasons for the disposition
+	Score       float64               // DMARC contribution to spam score
+	Error       string                // Error message if evaluation failed
 }
 
 // OrganizationalDomain represents an organizational domain extraction result
@@ -190,13 +193,13 @@ type OrganizationalDomain struct {
 type DMARCQueryInterface interface {
 	// QueryPolicy retrieves DMARC policy for a domain
 	QueryPolicy(ctx context.Context, domain string) (*DMARCPolicy, error)
-	
+
 	// QueryWithCache retrieves DMARC policy with caching
 	QueryWithCache(ctx context.Context, domain string) (*DMARCPolicy, error)
-	
+
 	// GetOrganizationalDomain extracts organizational domain
 	GetOrganizationalDomain(domain string) *OrganizationalDomain
-	
+
 	// CheckAlignment performs DMARC alignment checking
 	CheckAlignment(fromDomain string, spfResult *SPFResult, dkimResult *DKIMResult, policy *DMARCPolicy) *DMARCAlignmentResult
 }

@@ -491,6 +491,20 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				}
 			}
 
+			// Signature comparison flags
+			err = m.AddHeader("X-DKIM-Domain-Agreement", fmt.Sprintf("%t", dkimRes.DomainAgreement))
+			if err != nil {
+				return nil, err
+			}
+			err = m.AddHeader("X-DKIM-Selector-Reuse", fmt.Sprintf("%t", dkimRes.SelectorReuse))
+			if err != nil {
+				return nil, err
+			}
+			err = m.AddHeader("X-DKIM-Rollover", fmt.Sprintf("%t", dkimRes.RolloverDetected))
+			if err != nil {
+				return nil, err
+			}
+
 			if len(dkimRes.AlignmentCandidates) > 0 {
 				var ac []string
 				for _, c := range dkimRes.AlignmentCandidates {
