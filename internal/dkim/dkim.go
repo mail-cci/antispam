@@ -1032,7 +1032,7 @@ func calculateEnhancedScore(result *types.DKIMResult) float64 {
 
 		// Bonus for multiple valid signatures
 		if result.ValidSignatures > 1 {
-			score -= 0.5 * float64(result.ValidSignatures-1)
+			score -= 1.0 * float64(result.ValidSignatures-1)
 		}
 
 		// Quality bonus from best signature
@@ -1041,6 +1041,16 @@ func calculateEnhancedScore(result *types.DKIMResult) float64 {
 			if qualityScore > 10 { // Only apply bonus for high-quality signatures
 				score -= (qualityScore - 10) * 0.1
 			}
+		}
+
+		// Penalty for mixed results (some valid, some invalid)
+		if result.ValidSignatures < result.TotalSignatures {
+			score += 1.0
+		}
+
+		// Weak algorithm penalty even when there are valid signatures
+		if result.WeakHash {
+			score += 1.0
 		}
 	} else {
 		// No valid signatures - positive score (bad)
@@ -1080,18 +1090,13 @@ func calculateEnhancedScoreWithDegradation(result *types.DKIMResult) float64 {
 	if result.EdgeCaseInfo != nil && len(result.EdgeCaseInfo.Anomalies) > 0 {
 		// Adjust score based on threat level
 		switch result.EdgeCaseInfo.ThreatLevel {
-		case types.ThreatCritical:
-			// Critical threats significantly increase spam score
-			baseScore += 3.0
-		case types.ThreatHigh:
-			// High threats moderately increase spam score
-			baseScore += 2.0
+		case types.ThreatCritical, types.ThreatHigh:
+			// High and critical threats carry a large penalty
+			baseScore += 4.0
 		case types.ThreatMedium:
-			// Medium threats slightly increase spam score
-			baseScore += 1.0
+			baseScore += 2.0
 		case types.ThreatLow:
-			// Low threats have minimal impact
-			baseScore += 0.5
+			baseScore += 1.0
 		}
 
 		// Apply confidence-based adjustment
@@ -1185,7 +1190,7 @@ func calculatePartialCreditScore(result *types.DKIMResult) float64 {
 		// Convert partial credit to score adjustment
 		// Positive partial credit slightly reduces spam score
 		// Negative partial credit increases spam score
-		return -avgPartialCredit * 2.0 // Scale factor of 2
+		return -avgPartialCredit * 3.0 // Give partial credit more weight
 	}
 
 	return 0
