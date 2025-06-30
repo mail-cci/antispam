@@ -425,6 +425,83 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				}
 			}
 
+			// Collect additional DKIM details from signatures
+			var selectors, algorithms, keyLengths, timestamps, bodyCov []string
+			for _, sig := range dkimRes.Signatures {
+				if sig.Selector != "" {
+					selectors = append(selectors, sig.Selector)
+				}
+				if sig.Algorithm != "" {
+					algorithms = append(algorithms, sig.Algorithm)
+				}
+				if sig.KeyLength > 0 {
+					keyLengths = append(keyLengths, fmt.Sprintf("%d", sig.KeyLength))
+				}
+				if sig.Timestamp > 0 {
+					timestamps = append(timestamps, fmt.Sprintf("%d", sig.Timestamp))
+				}
+				if sig.BodyLength >= 0 {
+					bodyCov = append(bodyCov, fmt.Sprintf("%d", sig.BodyLength))
+				}
+			}
+
+			if len(selectors) > 0 {
+				err = m.AddHeader("X-DKIM-Selectors", strings.Join(selectors, ","))
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(algorithms) > 0 {
+				err = m.AddHeader("X-DKIM-Algorithms", strings.Join(algorithms, ","))
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(keyLengths) > 0 {
+				err = m.AddHeader("X-DKIM-Key-Lengths", strings.Join(keyLengths, ","))
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(timestamps) > 0 {
+				err = m.AddHeader("X-DKIM-Signature-Timestamps", strings.Join(timestamps, ","))
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(bodyCov) > 0 {
+				err = m.AddHeader("X-DKIM-Body-Coverage", strings.Join(bodyCov, ","))
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			// Weak hash indication
+			err = m.AddHeader("X-DKIM-Weak-Hash", fmt.Sprintf("%t", dkimRes.WeakHash))
+			if err != nil {
+				return nil, err
+			}
+
+			// Best signature information
+			if dkimRes.BestSignature != nil {
+				best := fmt.Sprintf("%s:%s", dkimRes.BestSignature.Domain, dkimRes.BestSignature.Selector)
+				err = m.AddHeader("X-DKIM-Best-Signature", best)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			if len(dkimRes.AlignmentCandidates) > 0 {
+				var ac []string
+				for _, c := range dkimRes.AlignmentCandidates {
+					ac = append(ac, fmt.Sprintf("%s:%s:%t", c.Domain, c.Selector, c.Valid))
+				}
+				err = m.AddHeader("X-DKIM-Alignment-Candidates", strings.Join(ac, ","))
+				if err != nil {
+					return nil, err
+				}
+			}
+
 			// Add edge case information if present
 			if dkimRes.EdgeCaseInfo != nil {
 				if len(dkimRes.EdgeCaseInfo.Anomalies) > 0 {
