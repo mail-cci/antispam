@@ -2,9 +2,9 @@ package dmarc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -73,8 +73,8 @@ func (v *DMARCVerifier) Verify(ctx context.Context, fromDomain string, spfResult
 		return result, fmt.Errorf("invalid domain: %s", fromDomain)
 	}
 
-	// Step 2: Query DMARC policy
-	policy, err := v.queryPolicy(ctx, orgDomain)
+	// Step 2: Query DMARC policy (with subdomain fallback)
+	policy, err := v.queryPolicyWithSubdomain(ctx, fromDomain, orgDomain)
 	if err != nil {
 		if v.logger != nil {
 			v.logger.Debug("DMARC policy query failed",
@@ -106,6 +106,9 @@ func (v *DMARCVerifier) Verify(ctx context.Context, fromDomain string, spfResult
 	// Step 5: Calculate final result
 	result.Valid = (alignment.SPFAligned || alignment.DKIMAligned)
 	result.Score = v.calculateScore(result, policy, alignment)
+
+	// Step 6: Generate report information
+	result.ReportInfo = v.generateReportInfo(fromDomain, spfResult, dkimResult, result)
 
 	if v.logger != nil {
 		v.logger.Debug("DMARC verification completed",
@@ -166,64 +169,35 @@ func (v *DMARCVerifier) queryPolicy(ctx context.Context, domain string) (*types.
 	return policy, nil
 }
 
-// parseDMARCRecord parses a DMARC TXT record
+// parseDMARCRecord parses a DMARC TXT record using the robust parser
 func (v *DMARCVerifier) parseDMARCRecord(record string) *types.DMARCPolicy {
-	policy := &types.DMARCPolicy{
-		Policy:          "none",
-		SubdomainPolicy: "",
-		SPFAlignment:    types.AlignmentRelaxed,
-		DKIMAlignment:   types.AlignmentRelaxed,
-		Percentage:      100,
-		ReportURI:       make([]string, 0),
-		ForensicURI:     make([]string, 0),
-	}
-
-	// Split record into tag-value pairs
-	pairs := strings.Split(record, ";")
-	for _, pair := range pairs {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
+	// Create parser instance
+	parser := NewParser(v.logger)
+	
+	// Use robust parser with comprehensive validation
+	policy, err := parser.ParseDMARCRecord(record)
+	if err != nil {
+		if v.logger != nil {
+			v.logger.Error("Failed to parse DMARC record with robust parser",
+				zap.String("record", record),
+				zap.Error(err))
 		}
-
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		tag := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		switch strings.ToLower(tag) {
-		case "v":
-			// Version - already validated
-		case "p":
-			policy.Policy = strings.ToLower(value)
-		case "sp":
-			policy.SubdomainPolicy = strings.ToLower(value)
-		case "adkim":
-			if strings.ToLower(value) == "s" {
-				policy.DKIMAlignment = types.AlignmentStrict
-			} else {
-				policy.DKIMAlignment = types.AlignmentRelaxed
-			}
-		case "aspf":
-			if strings.ToLower(value) == "s" {
-				policy.SPFAlignment = types.AlignmentStrict
-			} else {
-				policy.SPFAlignment = types.AlignmentRelaxed
-			}
-		case "pct":
-			if pct, err := strconv.Atoi(value); err == nil && pct >= 0 && pct <= 100 {
-				policy.Percentage = pct
-			}
-		case "rua":
-			policy.ReportURI = strings.Split(value, ",")
-		case "ruf":
-			policy.ForensicURI = strings.Split(value, ",")
+		
+		// Fallback to basic policy with error information
+		return &types.DMARCPolicy{
+			Policy:          "none",
+			SubdomainPolicy: "",
+			SPFAlignment:    types.AlignmentRelaxed,
+			DKIMAlignment:   types.AlignmentRelaxed,
+			Percentage:      100,
+			ReportURI:       make([]string, 0),
+			ForensicURI:     make([]string, 0),
+			RawRecord:       record,
+			ParseErrors:     []string{err.Error()},
+			UnknownTags:     make(map[string]string),
 		}
 	}
-
+	
 	return policy
 }
 
@@ -373,21 +347,282 @@ func (v *DMARCVerifier) getCachedPolicy(ctx context.Context, domain string) *typ
 	key := fmt.Sprintf("dmarc:policy:%s", domain)
 	result, err := v.rdb.Get(ctx, key).Result()
 	if err != nil {
+		if v.logger != nil {
+			v.logger.Debug("DMARC policy cache miss",
+				zap.String("domain", domain),
+				zap.Error(err))
+		}
 		return nil
 	}
 
-	// In a real implementation, you'd deserialize the policy from JSON/protobuf
-	// For now, return nil to force DNS lookup
-	_ = result
-	return nil
+	// Deserialize policy from JSON
+	var policy types.DMARCPolicy
+	if err := json.Unmarshal([]byte(result), &policy); err != nil {
+		if v.logger != nil {
+			v.logger.Error("Failed to deserialize cached DMARC policy",
+				zap.String("domain", domain),
+				zap.Error(err))
+		}
+		return nil
+	}
+
+	if v.logger != nil {
+		v.logger.Debug("DMARC policy cache hit",
+			zap.String("domain", domain),
+			zap.String("policy", policy.Policy))
+	}
+
+	return &policy
 }
 
 func (v *DMARCVerifier) cachePolicy(ctx context.Context, domain string, policy *types.DMARCPolicy) {
-	if !v.cacheEnabled {
+	if !v.cacheEnabled || policy == nil {
 		return
 	}
 
 	key := fmt.Sprintf("dmarc:policy:%s", domain)
-	// In a real implementation, you'd serialize the policy to JSON/protobuf
-	_ = v.rdb.Set(ctx, key, "cached", v.cacheTTL)
+	
+	// Serialize policy to JSON
+	data, err := json.Marshal(policy)
+	if err != nil {
+		if v.logger != nil {
+			v.logger.Error("Failed to serialize DMARC policy for caching",
+				zap.String("domain", domain),
+				zap.Error(err))
+		}
+		return
+	}
+
+	// Calculate TTL based on DNS record TTL or default
+	cacheTTL := v.cacheTTL
+	if policy.TTL > 0 {
+		dnsTTL := time.Duration(policy.TTL) * time.Second
+		if dnsTTL < cacheTTL {
+			cacheTTL = dnsTTL
+		}
+	}
+
+	if err := v.rdb.Set(ctx, key, string(data), cacheTTL).Err(); err != nil {
+		if v.logger != nil {
+			v.logger.Error("Failed to cache DMARC policy",
+				zap.String("domain", domain),
+				zap.Error(err))
+		}
+		return
+	}
+
+	if v.logger != nil {
+		v.logger.Debug("DMARC policy cached successfully",
+			zap.String("domain", domain),
+			zap.Duration("ttl", cacheTTL))
+	}
+}
+
+// generateReportInfo creates report information for DMARC feedback
+func (v *DMARCVerifier) generateReportInfo(fromDomain string, spfResult *types.SPFResult, dkimResult *types.DKIMResult, dmarcResult *types.DMARCResult) *types.DMARCReportInfo {
+	reportInfo := &types.DMARCReportInfo{
+		MessageDate:     time.Now().Unix(),
+		HeaderFrom:      fromDomain,
+		PolicyDomain:    fromDomain,
+		Disposition:     dmarcResult.Disposition,
+		ReportGenerated: false,
+	}
+
+	// Set SPF information
+	if spfResult != nil {
+		reportInfo.SPFResult = spfResult.Result
+		reportInfo.SPFDomain = spfResult.Domain
+	} else {
+		reportInfo.SPFResult = "none"
+	}
+
+	// Set DKIM information
+	if dkimResult != nil {
+		if dkimResult.Valid {
+			reportInfo.DKIMResult = "pass"
+		} else {
+			reportInfo.DKIMResult = "fail"
+		}
+		reportInfo.DKIMDomain = dkimResult.Domain
+	} else {
+		reportInfo.DKIMResult = "none"
+	}
+
+	// Determine if report should be generated
+	// Generate reports for failures or when policy requires it
+	if dmarcResult.Policy != nil {
+		// Generate report if DMARC failed or if policy has reporting URIs
+		reportInfo.ReportGenerated = (!dmarcResult.Valid || len(dmarcResult.Policy.ReportURI) > 0)
+	}
+
+	return reportInfo
+}
+
+// generateForensicReport creates a forensic report for DMARC failures
+func (v *DMARCVerifier) generateForensicReport(messageID, sourceIP, originalMessage string, dmarcResult *types.DMARCResult) *types.DMARCForensicReport {
+	if dmarcResult.Valid || dmarcResult.Policy == nil || len(dmarcResult.Policy.ForensicURI) == 0 {
+		return nil // No forensic report needed
+	}
+
+	report := &types.DMARCForensicReport{
+		MessageID:       messageID,
+		ReportID:        fmt.Sprintf("dmarc-forensic-%d", time.Now().Unix()),
+		FeedbackType:    "auth-failure",
+		UserAgent:       "CCI-Antispam-DMARC/1.0",
+		Version:         "1.0",
+		OriginalDate:    time.Now().Unix(),
+		ArrivalDate:     time.Now().Unix(),
+		SourceIP:        sourceIP,
+		DeliveryResult:  dmarcResult.Disposition,
+		OriginalMessage: originalMessage,
+		ReportURI:       dmarcResult.Policy.ForensicURI,
+	}
+
+	// Set failure reasons
+	authFailures := make([]string, 0)
+	for _, reason := range dmarcResult.Reason {
+		switch reason {
+		case "SPF alignment failed", "SPF check failed":
+			authFailures = append(authFailures, "spf")
+			report.SPFFailure = reason
+		case "DKIM alignment failed", "DKIM check failed":
+			authFailures = append(authFailures, "dkim")
+			report.DKIMFailure = reason
+		default:
+			report.DMARCFailure = reason
+		}
+	}
+	report.AuthFailure = authFailures
+
+	return report
+}
+
+// ShouldGenerateReport determines if a DMARC report should be generated
+func (v *DMARCVerifier) ShouldGenerateReport(dmarcResult *types.DMARCResult) bool {
+	if dmarcResult == nil || dmarcResult.Policy == nil {
+		return false
+	}
+
+	// Generate aggregate reports if RUA is specified
+	if len(dmarcResult.Policy.ReportURI) > 0 {
+		return true
+	}
+
+	// Generate forensic reports for failures if RUF is specified
+	if !dmarcResult.Valid && len(dmarcResult.Policy.ForensicURI) > 0 {
+		return true
+	}
+
+	return false
+}
+
+// queryPolicyWithSubdomain queries DMARC policy with subdomain policy support
+func (v *DMARCVerifier) queryPolicyWithSubdomain(ctx context.Context, fromDomain, orgDomain string) (*types.DMARCPolicy, error) {
+	isSubdomain := !strings.EqualFold(fromDomain, orgDomain)
+
+	// First, try to get policy from the organizational domain
+	policy, err := v.queryPolicy(ctx, orgDomain)
+	if err != nil {
+		return nil, err
+	}
+
+	if policy == nil {
+		return nil, nil
+	}
+
+	// If this is a subdomain and has a specific subdomain policy, apply it
+	if isSubdomain && policy.SubdomainPolicy != "" {
+		// Create a copy of the policy with subdomain-specific settings
+		subdomainPolicy := *policy
+		subdomainPolicy.Policy = policy.SubdomainPolicy
+		subdomainPolicy.Domain = fromDomain // Mark it as applying to the subdomain
+
+		if v.logger != nil {
+			v.logger.Debug("Applying subdomain DMARC policy",
+				zap.String("from_domain", fromDomain),
+				zap.String("org_domain", orgDomain),
+				zap.String("main_policy", policy.Policy),
+				zap.String("subdomain_policy", policy.SubdomainPolicy))
+		}
+
+		return &subdomainPolicy, nil
+	}
+
+	// For non-subdomains or when no specific subdomain policy exists,
+	// use the main policy
+	if v.logger != nil && isSubdomain {
+		v.logger.Debug("Using main DMARC policy for subdomain",
+			zap.String("from_domain", fromDomain),
+			zap.String("org_domain", orgDomain),
+			zap.String("policy", policy.Policy))
+	}
+
+	return policy, nil
+}
+
+// applyPolicyWithSubdomain determines the final disposition with subdomain support
+func (v *DMARCVerifier) applyPolicyWithSubdomain(policy *types.DMARCPolicy, alignment *types.DMARCAlignmentResult, fromDomain, orgDomain string) (string, []string) {
+	reasons := make([]string, 0)
+	isSubdomain := !strings.EqualFold(fromDomain, orgDomain)
+
+	// Check if either SPF or DKIM is aligned
+	if alignment.SPFAligned || alignment.DKIMAligned {
+		return "none", reasons // DMARC passes
+	}
+
+	// DMARC failed - determine which policy to apply
+	var effectivePolicy string
+	if isSubdomain && policy.SubdomainPolicy != "" {
+		effectivePolicy = policy.SubdomainPolicy
+		reasons = append(reasons, "subdomain policy applied")
+	} else {
+		effectivePolicy = policy.Policy
+	}
+
+	// Add reasons for failure
+	if !alignment.SPFAligned {
+		if alignment.SPFDomain != "" {
+			reasons = append(reasons, "SPF alignment failed")
+		} else {
+			reasons = append(reasons, "SPF check failed")
+		}
+	}
+
+	if !alignment.DKIMAligned {
+		if alignment.DKIMDomain != "" {
+			reasons = append(reasons, "DKIM alignment failed")
+		} else {
+			reasons = append(reasons, "DKIM check failed")
+		}
+	}
+
+	// Apply percentage policy
+	if policy.Percentage < 100 {
+		reasons = append(reasons, fmt.Sprintf("policy percentage: %d%%", policy.Percentage))
+	}
+
+	if v.logger != nil && isSubdomain && policy.SubdomainPolicy != "" {
+		v.logger.Debug("Applied subdomain DMARC disposition",
+			zap.String("from_domain", fromDomain),
+			zap.String("main_policy", policy.Policy),
+			zap.String("subdomain_policy", policy.SubdomainPolicy),
+			zap.String("effective_policy", effectivePolicy))
+	}
+
+	return effectivePolicy, reasons
+}
+
+// isSubdomain checks if a domain is a subdomain of another domain
+func (v *DMARCVerifier) isSubdomain(domain, parentDomain string) bool {
+	if strings.EqualFold(domain, parentDomain) {
+		return false
+	}
+
+	// Normalize domains to lowercase
+	domain = strings.ToLower(domain)
+	parentDomain = strings.ToLower(parentDomain)
+
+	// Check if domain ends with ".parentDomain"
+	suffix := "." + parentDomain
+	return strings.HasSuffix(domain, suffix)
 }

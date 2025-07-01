@@ -162,11 +162,21 @@ type DMARCPolicy struct {
 	SubdomainPolicy string             // Subdomain policy if different
 	SPFAlignment    DMARCAlignmentMode // Required SPF alignment mode
 	DKIMAlignment   DMARCAlignmentMode // Required DKIM alignment mode
-	Percentage      int                // Policy application percentage
-	ReportURI       []string           // Aggregate report URIs
-	ForensicURI     []string           // Forensic report URIs
+	Percentage      int                // Policy application percentage (0-100)
+	ReportURI       []string           // Aggregate report URIs (rua)
+	ForensicURI     []string           // Forensic report URIs (ruf)
 	Domain          string             // Domain this policy applies to
 	TTL             uint32             // DNS record TTL
+	
+	// Additional RFC 7489 fields
+	FailureOptions  []string           // Forensic report conditions (fo)
+	ReportInterval  uint32             // Report interval in seconds (ri)
+	Version         string             // DMARC version (v)
+	
+	// Parser metadata
+	RawRecord       string             // Original DNS record for reference
+	ParseErrors     []string           // Any parsing errors encountered
+	UnknownTags     map[string]string  // Unknown tags found in record
 }
 
 // DMARCResult represents DMARC evaluation result
@@ -178,6 +188,7 @@ type DMARCResult struct {
 	Reason      []string              // Reasons for the disposition
 	Score       float64               // DMARC contribution to spam score
 	Error       string                // Error message if evaluation failed
+	ReportInfo  *DMARCReportInfo      // Information for DMARC report generation
 }
 
 // OrganizationalDomain represents an organizational domain extraction result
@@ -217,4 +228,56 @@ type EmailAnalysis struct {
 	AuthResult AuthResult
 	TotalScore float64
 	Decision   string
+}
+
+// DMARCReportInfo contains information needed for DMARC report generation
+type DMARCReportInfo struct {
+	MessageID       string    // Email message ID
+	SourceIP        string    // Source IP address
+	MessageDate     int64     // Message timestamp
+	EnvelopeFrom    string    // Envelope from address
+	HeaderFrom      string    // Header from address
+	PolicyDomain    string    // Domain that published the DMARC policy
+	SPFDomain       string    // Domain used for SPF check
+	DKIMDomain      string    // Domain used for DKIM check
+	SPFResult       string    // SPF check result
+	DKIMResult      string    // DKIM check result
+	Disposition     string    // Applied disposition
+	ReportGenerated bool      // Whether this should generate a report
+}
+
+// DMARCAggregateReportRecord represents a single record in DMARC aggregate reports
+type DMARCAggregateReportRecord struct {
+	SourceIP        string                 // Source IP address
+	Count           int                    // Number of messages from this source
+	Disposition     string                 // Disposition applied
+	DMARCResult     string                 // Overall DMARC result
+	SPFDomain       string                 // SPF domain
+	SPFResult       string                 // SPF result
+	SPFAlignment    DMARCAlignmentMode     // SPF alignment mode
+	DKIMDomain      string                 // DKIM domain
+	DKIMResult      string                 // DKIM result
+	DKIMAlignment   DMARCAlignmentMode     // DKIM alignment mode
+	HeaderFrom      string                 // From header domain
+	EnvelopeFrom    string                 // Envelope from domain
+	Reason          []string               // Policy override reasons
+}
+
+// DMARCForensicReport represents a DMARC forensic (failure) report
+type DMARCForensicReport struct {
+	MessageID       string    // Original message ID
+	ReportID        string    // Unique report ID
+	FeedbackType    string    // Type of feedback (auth-failure)
+	UserAgent       string    // Reporting user agent
+	Version         string    // Report format version
+	OriginalDate    int64     // Original message date
+	ArrivalDate     int64     // Message arrival date
+	SourceIP        string    // Source IP address
+	AuthFailure     []string  // Authentication failure types
+	DeliveryResult  string    // Delivery result
+	SPFFailure      string    // SPF failure reason
+	DKIMFailure     string    // DKIM failure reason
+	DMARCFailure    string    // DMARC failure reason
+	OriginalMessage string    // Original message (headers/body)
+	ReportURI       []string  // Where to send the report
 }

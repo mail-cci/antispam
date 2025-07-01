@@ -571,8 +571,9 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 			}
 		}
 
-		// Add DMARC headers
+		// Add comprehensive DMARC headers
 		if dmarcRes != nil {
+			// Basic DMARC result
 			dmarcStatus := "fail"
 			if dmarcRes.Valid {
 				dmarcStatus = "pass"
@@ -582,18 +583,70 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				return nil, err
 			}
 
+			// Disposition and reasons
 			err = m.AddHeader("X-DMARC-Disposition", dmarcRes.Disposition)
 			if err != nil {
 				return nil, err
 			}
 
-			if dmarcRes.Policy != nil {
-				err = m.AddHeader("X-DMARC-Policy", dmarcRes.Policy.Policy)
+			if len(dmarcRes.Reason) > 0 {
+				err = m.AddHeader("X-DMARC-Reason", strings.Join(dmarcRes.Reason, ","))
 				if err != nil {
 					return nil, err
 				}
 			}
 
+			// Policy information
+			if dmarcRes.Policy != nil {
+				err = m.AddHeader("X-DMARC-Policy", dmarcRes.Policy.Policy)
+				if err != nil {
+					return nil, err
+				}
+
+				// Subdomain policy if different
+				if dmarcRes.Policy.SubdomainPolicy != "" && dmarcRes.Policy.SubdomainPolicy != dmarcRes.Policy.Policy {
+					err = m.AddHeader("X-DMARC-Subdomain-Policy", dmarcRes.Policy.SubdomainPolicy)
+					if err != nil {
+						return nil, err
+					}
+				}
+
+				// Alignment modes
+				err = m.AddHeader("X-DMARC-SPF-Mode", string(dmarcRes.Policy.SPFAlignment))
+				if err != nil {
+					return nil, err
+				}
+
+				err = m.AddHeader("X-DMARC-DKIM-Mode", string(dmarcRes.Policy.DKIMAlignment))
+				if err != nil {
+					return nil, err
+				}
+
+				// Percentage policy
+				if dmarcRes.Policy.Percentage < 100 {
+					err = m.AddHeader("X-DMARC-Percentage", fmt.Sprintf("%d", dmarcRes.Policy.Percentage))
+					if err != nil {
+						return nil, err
+					}
+				}
+
+				// Report URIs
+				if len(dmarcRes.Policy.ReportURI) > 0 {
+					err = m.AddHeader("X-DMARC-Report-URI", strings.Join(dmarcRes.Policy.ReportURI, ","))
+					if err != nil {
+						return nil, err
+					}
+				}
+
+				if len(dmarcRes.Policy.ForensicURI) > 0 {
+					err = m.AddHeader("X-DMARC-Forensic-URI", strings.Join(dmarcRes.Policy.ForensicURI, ","))
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			// Alignment details
 			if dmarcRes.Alignment != nil {
 				err = m.AddHeader("X-DMARC-SPF-Aligned", fmt.Sprintf("%t", dmarcRes.Alignment.SPFAligned))
 				if err != nil {
@@ -601,6 +654,35 @@ func (e *Email) Body(m *milter.Modifier) (milter.Response, error) {
 				}
 
 				err = m.AddHeader("X-DMARC-DKIM-Aligned", fmt.Sprintf("%t", dmarcRes.Alignment.DKIMAligned))
+				if err != nil {
+					return nil, err
+				}
+
+				// Domain information
+				if dmarcRes.Alignment.SPFDomain != "" {
+					err = m.AddHeader("X-DMARC-SPF-Domain", dmarcRes.Alignment.SPFDomain)
+					if err != nil {
+						return nil, err
+					}
+				}
+
+				if dmarcRes.Alignment.DKIMDomain != "" {
+					err = m.AddHeader("X-DMARC-DKIM-Domain", dmarcRes.Alignment.DKIMDomain)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			// Score information
+			err = m.AddHeader("X-DMARC-Score", fmt.Sprintf("%.2f", dmarcRes.Score))
+			if err != nil {
+				return nil, err
+			}
+
+			// Error information if present
+			if dmarcRes.Error != "" {
+				err = m.AddHeader("X-DMARC-Error", dmarcRes.Error)
 				if err != nil {
 					return nil, err
 				}
